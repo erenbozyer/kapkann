@@ -1,0 +1,7 @@
+foundry-local-sdk-winml
+sqlite-vec
+numpy
+fastapi
+uvicorn[standard]
+PyMuPDF
+requests

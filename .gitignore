@@ -1,0 +1,62 @@
+# ==========================================
+# KAP / RAG Specific Data & Databases
+# ==========================================
+KAP_DATA/
+kap_vectors.db
+*.db
+*.sqlite
+*.sqlite3
+
+# Model checkpoints / Large binary files
+*.pt
+*.safetensors
+*.bin
+*.onnx
+*.gguf
+
+# ==========================================
+# Python & Byte-code
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ==========================================
+# Virtual Environments
+# ==========================================
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# Environment Variables & Keys
+# ==========================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ==========================================
+# IDE & Code Editors
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==========================================
+# OS Specific Files
+# ==========================================
+.DS_Store
+Thumbs.db
+desktop.ini
