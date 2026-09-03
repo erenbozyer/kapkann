@@ -1,12 +1,8 @@
 """
-server.py — KAP RAG FastAPI Backend (Rakip Düzeyi Bilanço & Analiz)
+server.py — KAP RAG FastAPI Backend (Gerçek Veri Bilanço & Analiz Engine)
 
 REST API ile KAP RAG sistemini dışarıya açar.
 Foundry Local (phi-4-mini & qwen3-embedding-0.6b) üzerinde çalışır.
-
-Kullanım:
-    python server.py
-    python server.py --port 8000 --chat-model phi-4-mini
 """
 
 from __future__ import annotations
@@ -14,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -37,50 +34,53 @@ DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
 EMBEDDING_MODEL = "qwen3-embedding-0.6b"
 DEFAULT_CHAT_MODEL = "phi-4-mini"
 
-SYSTEM_PROMPT = """Sen BİST şirketlerinin KAP bildirimlerini ve finansal raporlarını analiz eden kıdemli bir Finansal Analist yapay zekasısın.
+SYSTEM_PROMPT = """Sen BİST şirketlerinin KAP verilerini derinlemesine inceleyen bağımsız ve kıdemli bir Finansal Analist yapay zekasısın.
 
-Sana verilen KAP bildirim ve bilanço metinlerini dikkatle inceleyerek kullanıcı sorusuna tam, şık ve profesyonel bir finansal rapor formatında yanıt ver.
+Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Hasılat, Dönen Varlıklar, Borçlar, Özkaynaklar) ve KAP bildirim metinlerini kullanarak kullanıcıya 100% gerçek verili ve profesyonel bir Bilanço Karnesi üret.
 
-CEVAP FORMATI VE YAPI KURALLARI:
-1. **Başlık**: 📊 [Şirket Kodu/Adı] Finansal Rapor & Bilanço Özeti — [Tarih/Dönem]
-2. **Finansal Rapor / Bilanço Özeti (Tablo Formatında)**:
-   Metindeki finansal tablolarda geçen rakamları (Hasılat, Brüt Kâr, Esas Faaliyet Kârı/Zararı, Dönem Net Kârı, Toplam Varlıklar, Özkaynaklar, Yükümlülükler vb.) aşağıdaki gibi Markdown Tablosu halinde sun:
+KURALLAR:
+1. **Gerçek Rakamları Kullan**: Metinde sağlanan somut finansal verileri (TL / Bin TL) birebir tabloya ve analize yansıt. Tablodaki puan sütununa somut puanları yaz!
+2. **Asla Şablon Kopyalama**: Örnek kelimeleri veya uydurma rakamları kullanma!
+3. **Puanlama**: Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden objektif puanlar ver.
 
-   | Kalem | Değer (Bin TL / TL) |
-   | :--- | :--- |
-   | Hasılat / Ciro | ... |
-   | Brüt Kâr | ... |
-   | Esas Faaliyet Kârı/Zararı | ... |
-   | Dönem Net Kârı / Zararı | ... |
-   | Toplam Varlıklar | ... |
-   | Toplam Özkaynaklar | ... |
-   | Toplam Yükümlülükler | ... |
+CEVAP YAPISI:
 
-3. **🔑 Temel Finansal Kalemler & Borç Yapısı**:
-   Kısa ve uzun vadeli yükümlülükler ile borç yapısını özetle.
-4. **💰 Kârlılık ve Operasyonel Görünüm**:
-   Şirketin ciro, kârlılık veya faaliyet kârı gidişatını 2-3 cümle ile değerlendir.
-5. **⚠️ Genel Durum ve Analist Yorumu**:
-   Özkaynak gücü, finansal yapı ve stratejik kararlar hakkında net bir genel değerlendirme yap.
+📋 **[ŞİRKET_KODU] Bilanço Karnesi & Finansal Rapor Özeti · [DÖNEM]**
+⭐ **Genel Finansal Skor:** [SKOR]/5 — [Değerlendirme (Zayıf / Orta / İyi / Çok İyi)]
 
-- Sadece sağlanan KAP kaynaklarındaki somut rakam ve bilgilere dayan. Türkçe dilini profesyonel kullan."""
+| Finansal Kalem / Kategori | Gerçek Değer (Bin TL) | Puan (5 Üzerinden) | Analiz Özeti |
+| :--- | :--- | :---: | :--- |
+| 📈 **Hasılat / Ciro** | [Rakam] | [Puan]/5 | [Ciro seviyesi ve büyüme] |
+| 💧 **Dönen Varlıklar / Likidite** | [Rakam] | [Puan]/5 | [Cari Oran ve Nakit gücü] |
+| 🛡️ **Borçlar & Yükümlülükler** | [Rakam] | [Puan]/5 | [Kısa ve Uzun Vadeli Borçlar] |
+| ⚙️ **Toplam Özkaynaklar** | [Rakam] | [Puan]/5 | [Özkaynak büyüklüğü ve bilanço dengesi] |
+
+📝 **Detaylı Analist Değerlendirmesi:**
+[Şirketin bilanço büyüklüğü, cari oranı, borçluluk yapısı ve özkaynak gücü hakkında 3-4 cümlelik somut analist yorumu.]"""
 
 
 def get_foundry_base_url() -> str:
-    """Foundry Local server adresini dinamik tespit et."""
+    """Foundry Local server adresini dinamik tespit et (Windows shell=True destekli)."""
     try:
-        res = subprocess.run(["foundry", "status", "-o", "json"], capture_output=True, text=True)
-        if res.returncode == 0:
+        res = subprocess.run("foundry status -o json", shell=True, capture_output=True, text=True)
+        if res.returncode == 0 and res.stdout.strip():
             data = json.loads(res.stdout)
             urls = data.get("service", {}).get("webUrls", [])
             if urls:
                 return urls[0].rstrip("/") + "/v1"
     except Exception:
         pass
-    return "http://127.0.0.1:51667/v1"
 
+    try:
+        res = subprocess.run("foundry status", shell=True, capture_output=True, text=True)
+        m = re.search(r"http://127\.0\.0\.1:\d+", res.stdout)
+        if m:
+            return m.group(0) + "/v1"
+    except Exception:
+        pass
 
-# ──────────────────────────── Global State ────────────────────────────
+    return "http://127.0.0.1:59812/v1"
+
 
 class AppState:
     db: sqlite3.Connection = None
@@ -90,13 +90,55 @@ class AppState:
 state = AppState()
 
 
-# ──────────────────────────── Helpers ────────────────────────────
-
 def serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
-# ──────────────────────────── Lifespan ────────────────────────────
+def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
+    comp_str = company.upper()
+    rows = db.execute(
+        """
+        SELECT date, text FROM chunks 
+        WHERE (company = ? OR company LIKE ?) AND type = 'FR'
+        ORDER BY date DESC
+        LIMIT 35
+        """,
+        (comp_str, f"%{comp_str}%"),
+    ).fetchall()
+
+    if not rows:
+        return {}
+
+    latest_date = rows[0]["date"]
+    facts = {}
+
+    target_headers = {
+        "TOPLAM DÖNEN VARLIKLAR": "donen_varliklar",
+        "TOPLAM KISA VADELİ YÜKÜMLÜLÜKLER": "kisa_vadeli_borclar",
+        "TOPLAM UZUN VADELİ YÜKÜMLÜLÜKLER": "uzun_vadeli_borclar",
+        "TOPLAM ÖZKAYNAKLAR": "ozkaynaklar",
+        "Hasılat": "hasilat",
+    }
+
+    for r in rows:
+        if r["date"] != latest_date:
+            continue
+        lines = r["text"].splitlines()
+        for j, line in enumerate(lines):
+            clean_l = line.strip()
+            for header, key in target_headers.items():
+                if key not in facts and (header == clean_l or (header in clean_l and len(clean_l) < 40)):
+                    val_idx = j + 1
+                    while val_idx < len(lines) and val_idx < j + 4:
+                        v_line = lines[val_idx].strip()
+                        if re.search(r"\d+[\.\d]*", v_line):
+                            facts[key] = v_line
+                            break
+                        val_idx += 1
+
+    facts["date"] = latest_date
+    return facts
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -131,12 +173,10 @@ async def lifespan(app: FastAPI):
         state.db.close()
 
 
-# ──────────────────────────── FastAPI ────────────────────────────
-
 app = FastAPI(
     title="KAP RAG API",
-    description="KAP bildirimleri ve finansal raporlar üzerinde RAG soru-cevap sistemi",
-    version="1.1.0",
+    description="KAP bildirimleri ve Gerçek Bilanço Karnesi soru-cevap sistemi",
+    version="1.3.0",
     lifespan=lifespan,
 )
 
@@ -149,13 +189,11 @@ app.add_middleware(
 )
 
 
-# ──────────────────────────── Models ────────────────────────────
-
 class AskRequest(BaseModel):
     question: str = Field(..., description="Sorulacak soru")
     company: Optional[str] = Field(None, description="Şirket kodu filtresi (THYAO, AKBNK...)")
     type: Optional[str] = Field(None, description="Bildirim türü filtresi (ODA, FR, DG)")
-    top_k: int = Field(5, ge=1, le=30, description="Getirilecek chunk sayısı")
+    top_k: int = Field(4, ge=1, le=30, description="Getirilecek chunk sayısı")
 
 class Source(BaseModel):
     company: str
@@ -175,8 +213,6 @@ class AskResponse(BaseModel):
     query_time_ms: float
 
 
-# ──────────────────────────── Endpoints ────────────────────────────
-
 @app.post("/api/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
     start = time.time()
@@ -184,17 +220,23 @@ async def ask(req: AskRequest):
     if not req.question.strip():
         raise HTTPException(400, "Soru boş olamaz")
 
-    # 0. Finansal Terim Niyet Algılama
-    fin_keywords = [
-        "finansal", "rapor", "bilanço", "bilanco", "gelir", "kar", "kâr", 
-        "zarar", "hasılat", "ciro", "özkaynak", "ozkaynak", "varlık", "borç", "borc", "marj", "durum"
-    ]
-    is_financial_query = any(w in req.question.lower() for w in fin_keywords)
+    q_lower = req.question.lower()
+    karne_keywords = ["karne", "skor", "not", "derece", "karne nasıl", "performans", "trend", "net kar"]
+    fin_keywords = ["finansal", "rapor", "bilanço", "bilanco", "gelir", "kar", "kâr", "zarar", "hasılat", "ciro", "özkaynak", "borç", "marj"]
 
+    is_karne_query = any(w in q_lower for w in karne_keywords)
+    is_financial_query = is_karne_query or any(w in q_lower for w in fin_keywords)
+
+    real_facts_summary = ""
     matched_chunks = []
     seen_ids = set()
 
-    # Doğrudan FR (Finansal Rapor) bildirimlerini önceliklendir
+    if req.company:
+        facts = extract_real_financial_facts(state.db, req.company)
+        if facts:
+            fact_lines = [f"• {k.upper()}: {v}" for k, v in facts.items() if k != "date"]
+            real_facts_summary = f"BİLANÇO TARİHİ: {facts.get('date')}\nAYIKLANAN DOĞRUDAN VERİLER:\n" + "\n".join(fact_lines)
+
     if is_financial_query and req.company and not req.type:
         comp_str = req.company.upper()
         fr_rows = state.db.execute(
@@ -211,7 +253,6 @@ async def ask(req: AskRequest):
                 seen_ids.add(r["id"])
                 matched_chunks.append(r)
 
-    # Vektör Araması ile Tamamla
     if len(matched_chunks) < req.top_k:
         subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
         q_res = state.client.embeddings.create(model=EMBEDDING_MODEL, input=req.question)
@@ -220,7 +261,7 @@ async def ask(req: AskRequest):
         q_embedding = q_res.data[0].embedding
         q_blob = serialize_f32(q_embedding)
 
-        fetch_count = req.top_k * 20 if (req.company or req.type) else req.top_k * 5
+        fetch_count = req.top_k * 15 if (req.company or req.type) else req.top_k * 5
         vec_rows = state.db.execute(
             """
             SELECT v.id, v.distance
@@ -265,38 +306,38 @@ async def ask(req: AskRequest):
             query_time_ms=round((time.time() - start) * 1000, 1),
         )
 
-    # Context
     context_parts = []
+    if real_facts_summary:
+        context_parts.append(f"[DOĞRUDAN GERÇEK BİLANÇO KALEMLERİ]\n{real_facts_summary}")
+
     for i, chunk in enumerate(matched_chunks):
-        header = f"[Kaynak {i+1} - Tür: {chunk['type']} | Tarih: {chunk['date']}] Şirket: {chunk['company']} | Başlık: {chunk['title'] or ''}"
-        snippet = chunk['text'][:1200]
+        header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
+        snippet = chunk['text'][:700]
         context_parts.append(f"{header}\n{snippet}")
 
     context = "\n\n---\n\n".join(context_parts)
 
-    # LLM (phi-4-mini)
     subprocess.run(["foundry", "model", "load", state.chat_model_name], capture_output=True)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"KAP FİNANSAL RAPOR VE BİLDİRİM KAYNAKLARI:\n{context}\n\n"
+            "content": f"KAP GERÇEK BİLANÇO RAKAMLARI VE METİNLERİ:\n{context}\n\n"
                        f"SORU: {req.question}\n\n"
-                       f"Yukarıdaki KAP verilerindeki rakamları kullanarak soruları Markdown Tablosu (📊) ve analiz başlıkları (🔑, 💰, ⚠️) halinde yanıtla:",
+                       f"Yukarıdaki GERÇEK RAKAMLARI kullanarak soruları yanıtla, tablodaki puanları doldur ve Bilanço Karnesi oluştur:",
         },
     ]
 
     chat_res = state.client.chat.completions.create(
         model=state.chat_model_name,
         messages=messages,
-        max_tokens=700,
-        temperature=0.2,
+        max_tokens=600,
+        temperature=0.1,
     )
     answer = chat_res.choices[0].message.content
     if "<think>" in answer and "</think>" in answer:
         answer = answer.split("</think>")[-1].strip()
 
-    # Sources
     seen = set()
     sources = []
     for i, chunk in enumerate(matched_chunks):
