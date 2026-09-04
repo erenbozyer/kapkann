@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAPKANN — BİST KAP RAG & Finansal Analiz Engine</title>
+  
+  <!-- Google Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Marked.js for Markdown parsing -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-icon">
+            <i class="fa-solid fa-chart-line"></i>
+          </div>
+          <div class="brand-text">
+            <h2>KAPKANN</h2>
+            <span>BİST AI Financial Engine</span>
+          </div>
+        </div>
+        <button class="btn-icon mobile-close-btn" id="closeSidebarBtn">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <button class="btn-new-chat" id="newChatBtn">
+        <i class="fa-solid fa-plus"></i> Yeni Sohbet
+      </button>
+
+      <!-- Company Selector Filter -->
+      <div class="filter-section">
+        <label class="filter-label" for="companySelect">
+          <i class="fa-solid fa-building"></i> Şirket Filtresi
+        </label>
+        <div class="select-wrapper">
+          <select id="companySelect">
+            <option value="">Tüm Şirketler (Genel Arama)</option>
+          </select>
+          <i class="fa-solid fa-chevron-down select-arrow"></i>
+        </div>
+      </div>
+
+      <!-- Quick Analysis Templates -->
+      <div class="templates-section">
+        <div class="section-title">
+          <i class="fa-solid fa-bolt"></i> Hızlı Analiz Şablonları
+        </div>
+        <div class="template-chips">
+          <button class="template-chip" data-template="bilanco">
+            <span class="chip-icon">📊</span> Bilanço Karnesi
+          </button>
+          <button class="template-chip" data-template="gelir">
+            <span class="chip-icon">📈</span> Gelir & Karlılık
+          </button>
+          <button class="template-chip" data-template="temettu">
+            <span class="chip-icon">💰</span> Temettü & Bedelsiz
+          </button>
+          <button class="template-chip" data-template="yatirim">
+            <span class="chip-icon">🤝</span> Yeni İş & Yatırım
+          </button>
+          <button class="template-chip" data-template="genel">
+            <span class="chip-icon">📰</span> KAP Haber Özeti
+          </button>
+        </div>
+      </div>
+
+      <!-- Chat History -->
+      <div class="history-section">
+        <div class="section-title">
+          <i class="fa-solid fa-clock-rotate-left"></i> Sohbet Geçmişi
+        </div>
+        <div class="history-list" id="historyList">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+      <!-- Server Status Badge -->
+      <div class="sidebar-footer">
+        <div class="status-badge" id="serverStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Sunucu Bağlanıyor...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Chat Area -->
+    <main class="main-content">
+      <!-- Top Navbar -->
+      <header class="top-navbar">
+        <div class="navbar-left">
+          <button class="btn-icon mobile-menu-btn" id="openSidebarBtn">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+          <div class="active-company-info" id="activeCompanyBadge">
+            <span class="company-badge-icon"><i class="fa-solid fa-globe"></i></span>
+            <span class="company-badge-name">Tüm Şirketler</span>
+          </div>
+        </div>
+        <div class="navbar-right">
+          <div class="model-info-tag">
+            <i class="fa-solid fa-brain"></i>
+            <span>phi-4-mini + Qwen3</span>
+          </div>
+          <button class="btn-icon" id="clearChatBtn" title="Sohbeti Temizle">
+            <i class="fa-solid fa-trash-can"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- Chat Scroll Body -->
+      <div class="chat-body" id="chatBody">
+        <!-- Welcome Screen (Initial State) -->
+        <div class="welcome-container" id="welcomeContainer">
+          <div class="welcome-hero">
+            <div class="welcome-icon">
+              <i class="fa-solid fa-shield-halved"></i>
+            </div>
+            <h1>BİST KAP RAG & Finansal Analiz Motoru</h1>
+            <p>Gerçek bilanço kalemleri, KAP bildirimleri ve yapay zeka ile 100% somut finansal analizler üretin.</p>
+          </div>
+
+          <div class="quick-cards-grid">
+            <div class="quick-card" data-prompt="bilanço ve borçluluk durumu nasıl?">
+              <div class="card-icon">📊</div>
+              <div class="card-title">Bilanço & Likidite Karnesi</div>
+              <div class="card-desc">Cari oran, borç yükü ve özkaynak skorunu 100% gerçek sayılarla hesaplar.</div>
+            </div>
+
+            <div class="quick-card" data-prompt="ciro ve net dönem karı ne kadar?">
+              <div class="card-icon">📈</div>
+              <div class="card-title">Gelir Tablosu & Karlılık</div>
+              <div class="card-desc">Hasılat, esas faaliyet karı ve net dönem karı performansını inceler.</div>
+            </div>
+
+            <div class="quick-card" data-prompt="temettü dağıtacak mı, kar payı kararı var mı?">
+              <div class="card-icon">💰</div>
+              <div class="card-title">Temettü & Bedelsiz Karnesi</div>
+              <div class="card-desc">Hisse başı net kar payı, bedelsiz oranı ve hak kullanım tarihlerini listeler.</div>
+            </div>
+
+            <div class="quick-card" data-prompt="yeni iş ilişkisi veya yatırım duyurdu mu?">
+              <div class="card-icon">🤝</div>
+              <div class="card-title">Yeni İş & İhale Haberleri</div>
+              <div class="card-desc">Kazanılan ihaleler, sözleşme bedelleri ve fabrika yatırım kararlarını ayıklar.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Dynamic Messages Container -->
+        <div class="messages-list" id="messagesList"></div>
+      </div>
+
+      <!-- Chat Input Section -->
+      <footer class="chat-input-area">
+        <div class="input-container">
+          <div class="active-tag" id="inputActiveTag" style="display: none;">
+            <span id="inputTagText">THYAO</span>
+            <i class="fa-solid fa-xmark" id="removeInputTag"></i>
+          </div>
+
+          <textarea 
+            id="chatInput" 
+            placeholder="Bir BİST şirketi seçin veya soru sorun... (Örn: THYAO bilanço karnesi nasıl?)"
+            rows="1"
+          ></textarea>
+
+          <button id="sendBtn" class="btn-send" disabled>
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </div>
+
+        <div class="input-footer-note">
+          <i class="fa-solid fa-circle-info"></i> KAP verileri SQLite + Vector DB üzerinden gerçek zamanlı sorgulanmaktadır.
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
