@@ -75,20 +75,25 @@ CEVAP YAPISI:
 📝 **Karlılık ve Operasyonel Performans Analizi:**
 [3-4 cümlelik detaylı analist değerlendirmesi]"""
 
-PROMPT_TEMETTU = """Sen BİST şirketlerinin temettü (kar payı) ve sermaye artırımı (bedelsiz/bedelli) kararlarını inceleyen bir Finansal Analistsin.
-Sana verilen KAP bildirim metinlerini ve kararlarını inceleyerek net bir Kar Payı & Sermaye Raporu üret.
+PROMPT_TEMETTU = """Sen BİST şirketlerinin temettü (kar payı) ve sermaye artırımı (bedelsiz/bedelli) kararlarını inceleyen kıdemli bir Finansal Analistsin.
+Sana verilen KAP Kar Payı Dağıtım Bildirimi metinlerini kullanarak GERÇEK RAKAMLARLA Kar Payı & Sermaye Raporu üret.
+
+KURALLAR:
+1. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı ("Pay Dışında Sermaye Piyasası Aracı") bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
+2. Eğer 1. Taksit, 2. Taksit gibi taksitli temettü ödemesi varsa, her taksidi ve tarihlerini ayrı satırlar halinde tabloda göster.
+3. Eğer sunulan metinlerde temettü kararı yoksa "Temettü kararı bulunmamaktadır" yaz, kesinlikle borçlanma aracı ödemelerini temettü gibi gösterme.
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
 
-| Karar Türü | Oran / Tutar | Hak Kullanım / Ödeme Tarihi | Durum |
-| :--- | :--- | :--- | :--- |
-| 💵 **Temettü (Kar Payı)** | [Hisse Başı Brüt/Net TL] | [Tarih veya Belirtilmedi] | [Genel Kurul Onayında / Kesinleşti] |
-| 📈 **Bedelsiz Sermaye Artırımı** | [% Oran] | [Tarih veya Belirtilmedi] | [SPK Başvurusu / Onaylandı] |
-| 🏦 **Bedelli Sermaye Artırımı** | [% Oran] | [Tarih veya Belirtilmedi] | [Varsa Detay] |
+| Karar / Taksit Türü | Hisse Başı Brüt TL | Hisse Başı Net TL | Ödeme / Hak Kullanım Tarihi | Toplam Tutar / Oran | Durum |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| 💵 **1. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı / Ödendi] |
+| 💵 **2. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı] |
+| 📈 **Bedelsiz Sermaye Artırımı** | - | - | [Tarih/Yok] | [% Oran/Yok] | [Varsa Detay] |
 
-📝 **Yatırımcı Notu & Değerlendirme:**
-[2-3 cümlelik net açıklama ve karar özeti]"""
+📝 **Yatırımcı Notu & Analist Değerlendirmesi:**
+[2-3 cümlelik net açıklama, toplam temettü tutarı, ödeme tarihleri ve kar dağıtım oranı özeti]"""
 
 PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale sonuçlarını ve yatırım kararlarını inceleyen bir Finansal Analistsin.
 Sana verilen KAP Özel Durum Açıklamalarını (ÖDA) inceleyerek Yeni İş İlişkisi & Yatırım Raporu üret.
@@ -118,7 +123,6 @@ CEVAP YAPISI:
 
 
 def get_foundry_base_url() -> str:
-    """Foundry Local server adresini dinamik tespit et (Windows shell=True destekli)."""
     try:
         res = subprocess.run("foundry status -o json", shell=True, capture_output=True, text=True)
         if res.returncode == 0 and res.stdout.strip():
@@ -189,7 +193,7 @@ def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
     fin_rows = [r for r in rows if r["title"] and ("Finansal Rapor" in r["title"] or "Bilanço" in r["title"])]
     target_pool = fin_rows if fin_rows else rows
 
-    latest_date_prefix = target_pool[0]["date"][:10]  # "YYYY.MM.DD"
+    latest_date_prefix = target_pool[0]["date"][:10]
     period_rows = [r for r in target_pool if r["date"].startswith(latest_date_prefix)]
 
     facts = {}
@@ -288,7 +292,7 @@ def ask_kap(
     chat_model_name: str = CHAT_MODEL,
     company_filter: str = None,
     type_filter: str = None,
-    top_k: int = 4,
+    top_k: int = 5,
 ) -> dict:
     start = time.time()
 
@@ -298,35 +302,67 @@ def ask_kap(
     matched_chunks = []
     seen_ids = set()
 
+    # Gerçek bilanço verisi ayıklama (Bilanço ve Gelir modlarında)
     if company_filter and intent_code in ("BILANCO", "GELIR"):
         facts = extract_real_financial_facts(db, company_filter)
         if facts:
             fact_lines = [f"• {k.upper()}: {v}" for k, v in facts.items() if k != "date"]
             real_facts_summary = f"BİLANÇO DÖNEMİ: {facts.get('date')} (Birim: {facts.get('para_birimi')})\nAYIKLANAN GERÇEK VERİLER VE RASYOLAR:\n" + "\n".join(fact_lines)
 
-    target_type = type_filter
-    if not target_type and company_filter:
-        if intent_code in ("BILANCO", "GELIR"):
-            target_type = "FR"
-        elif intent_code in ("TEMETTU", "YATIRIM"):
-            target_type = "ODA"
-
-    if target_type and company_filter:
+    # Niyete özel hassas başlık filtresi
+    if company_filter:
         comp_str = company_filter.upper()
-        type_rows = db.execute(
-            """
-            SELECT * FROM chunks 
-            WHERE (company = ? OR company LIKE ?) AND type = ?
-            ORDER BY date DESC
-            LIMIT 4
-            """,
-            (comp_str, f"%{comp_str}%", target_type),
-        ).fetchall()
-        for r in type_rows:
-            if r["id"] not in seen_ids:
-                seen_ids.add(r["id"])
-                matched_chunks.append(r)
 
+        if intent_code in ("BILANCO", "GELIR"):
+            rows = db.execute(
+                """
+                SELECT * FROM chunks 
+                WHERE (company = ? OR company LIKE ?) AND type = 'FR'
+                ORDER BY date DESC
+                LIMIT 6
+                """,
+                (comp_str, f"%{comp_str}%"),
+            ).fetchall()
+            for r in rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
+
+        elif intent_code == "TEMETTU":
+            # Kar Payı ve Temettü bildirimlerini doğrudan başlığa göre filtrele!
+            rows = db.execute(
+                """
+                SELECT * FROM chunks 
+                WHERE (company = ? OR company LIKE ?) 
+                  AND (title LIKE '%Kar Payı%' OR title LIKE '%Temettü%' OR title LIKE '%Sermaye Artırımı%' OR text LIKE '%Kar Payı Dağıtım%')
+                ORDER BY date DESC
+                LIMIT 6
+                """,
+                (comp_str, f"%{comp_str}%"),
+            ).fetchall()
+            for r in rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
+
+        elif intent_code == "YATIRIM":
+            # Yeni iş ve Yatırım bildirimlerini doğrudan başlığa göre filtrele!
+            rows = db.execute(
+                """
+                SELECT * FROM chunks 
+                WHERE (company = ? OR company LIKE ?) 
+                  AND (title LIKE '%Yeni İş%' OR title LIKE '%Sözleşme%' OR title LIKE '%İhale%' OR title LIKE '%Yatırım%' OR title LIKE '%Kapasite%' OR text LIKE '%yeni iş ilişkisi%')
+                ORDER BY date DESC
+                LIMIT 6
+                """,
+                (comp_str, f"%{comp_str}%"),
+            ).fetchall()
+            for r in rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
+
+    # Vektör Araması ile Destekleme
     if len(matched_chunks) < top_k:
         subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
         q_res = client.embeddings.create(model=EMBEDDING_MODEL, input=question)
@@ -388,7 +424,7 @@ def ask_kap(
 
     for i, chunk in enumerate(matched_chunks):
         header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
-        snippet = chunk['text'][:750]
+        snippet = chunk['text'][:850]
         context_parts.append(f"{header}\n{snippet}")
 
     context = "\n\n---\n\n".join(context_parts)
@@ -398,9 +434,9 @@ def ask_kap(
         {"role": "system", "content": selected_prompt},
         {
             "role": "user",
-            "content": f"KAP GERÇEK BİLANÇO RAKAMLARI VE BİLDİRİM METİNLERİ:\n{context}\n\n"
+            "content": f"KAP GERÇEK BİLDİRİM METİNLERİ VE VERİLER:\n{context}\n\n"
                        f"SORU: {question}\n\n"
-                       f"Yukarıdaki verileri ve gerçek rakamları kullanarak soruyu yanıtla ve uygun rapor/tablo formatını doldur:",
+                       f"Yukarıdaki metinlerde yer alan GERÇEK RAKAMLARI ve TARİHLERİ kullanarak soruyu yanıtla:",
         },
     ]
 
@@ -471,7 +507,7 @@ def main():
     parser.add_argument("question", nargs="?", help="Sorulacak soru")
     parser.add_argument("--company", "-c", help="Şirket kodu filtresi (THYAO, AKBNK...)")
     parser.add_argument("--type", "-t", help="Bildirim türü filtresi (ODA, FR, DUY)")
-    parser.add_argument("--top-k", "-k", type=int, default=4, help="Getirilecek chunk sayısı")
+    parser.add_argument("--top-k", "-k", type=int, default=5, help="Getirilecek chunk sayısı")
     parser.add_argument("--db", default=DB_PATH, help="Vektör DB yolu")
     parser.add_argument("--chat-model", default=CHAT_MODEL, help="Chat LLM modeli")
     args = parser.parse_args()
