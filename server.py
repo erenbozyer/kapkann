@@ -1,7 +1,8 @@
 """
-server.py — KAP RAG FastAPI Backend (5 Analiz Modu & Gerçek Veri Engine + Web UI)
+server.py — KAP RAG FastAPI Backend (5 Analiz Modu, SQLite Fact Engine & Web UI)
 
 REST API ve Modern Web UI ile KAP RAG sistemini dışarıya açar.
+SQLite qa_cache tablosu ile önbellekleme ve "Yeniden Üret" desteği sunar.
 Foundry Local (phi-4-mini & qwen3-embedding-0.6b) üzerinde çalışır.
 """
 
@@ -45,6 +46,7 @@ Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, �
 KURALLAR:
 1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
 2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
+3. Asla metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme!
 
 CEVAP YAPISI:
 📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
@@ -81,24 +83,27 @@ CEVAP YAPISI:
 [3-4 cümlelik detaylı analist değerlendirmesi]"""
 
 PROMPT_TEMETTU = """Sen BİST şirketlerinin temettü (kar payı) ve sermaye artırımı (bedelsiz/bedelli) kararlarını inceleyen kıdemli bir Finansal Analistsin.
-Sana verilen KAP Kar Payı Dağıtım Bildirimi metinlerini kullanarak GERÇEK RAKAMLARLA Kar Payı & Sermaye Raporu üret.
+Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rakamları kullanarak Kar Payı Karnesi üret.
 
-KURALLAR:
-1. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı ("Pay Dışında Sermaye Piyasası Aracı") bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
-2. Eğer 1. Taksit, 2. Taksit gibi taksitli temettü ödemesi varsa, her taksidi ve tarihlerini ayrı satırlar halinde tabloda göster.
-3. Eğer sunulan metinlerde temettü kararı yoksa "Temettü kararı bulunmamaktadır" yaz, kesinlikle borçlanma aracı ödemelerini temettü gibi gösterme.
+ÖNEMLİ KURALLAR:
+1. TABLODAKİ SÜTUNLARA SADECE DOĞRU BİLGİLERİ YAZ:
+   - "Hisse Başı Brüt (TL)": Sadece 10,38 TL, 6,75 TL gibi hisse başına düşen küçük TL tutarlarını yaz. Toplam milyarlık tutarları sakın buraya yazma!
+   - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
+2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
+3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
+4. KESİNLİKLE metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme! Doğrudan tabloyu ve Analist Değerlendirmesini ver ve bitir!
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
 
-| Karar / Taksit Türü | Hisse Başı Brüt TL | Hisse Başı Net TL | Ödeme / Hak Kullanım Tarihi | Toplam Tutar / Oran | Durum |
+| Karar / Taksit Türü | Hisse Başı Brüt (TL) | Hisse Başı Net (TL) | Ödeme / Hak Kullanım Tarihi | Toplam Nakit Kar Payı | Durum |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| 💵 **1. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı / Ödendi] |
-| 💵 **2. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı] |
-| 📈 **Bedelsiz Sermaye Artırımı** | - | - | [Tarih/Yok] | [% Oran/Yok] | [Varsa Detay] |
+| 💵 **1. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
+| 💵 **2. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
+| 📈 **Bedelsiz Sermaye Artırımı** | - | - | - | % Oran Yok | Varsa Belirtilmedi |
 
 📝 **Yatırımcı Notu & Analist Değerlendirmesi:**
-[2-3 cümlelik net açıklama, toplam temettü tutarı, ödeme tarihleri ve kar dağıtım oranı özeti]"""
+[2-3 cümlelik net açıklama, toplam temettü tutarı, taksit ödeme tarihleri ve karar özeti]"""
 
 PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale sonuçlarını ve yatırım kararlarını inceleyen bir Finansal Analistsin.
 Sana verilen KAP Özel Durum Açıklamalarını (ÖDA) inceleyerek Yeni İş İlişkisi & Yatırım Raporu üret.
@@ -171,6 +176,85 @@ def clean_str(s: str) -> str:
     for k, v in replacements.items():
         s = s.replace(k, v)
     return s
+
+
+# ──────────────────────────── Önbellek Fonksiyonları ────────────────────────────
+
+def init_cache_table(db: sqlite3.Connection):
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS qa_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_normalized TEXT UNIQUE,
+            question_raw TEXT,
+            company TEXT,
+            answer TEXT,
+            sources_json TEXT,
+            chunks_used INTEGER,
+            query_time_ms REAL,
+            intent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    db.commit()
+
+
+def normalize_q(q: str, company: str = None) -> str:
+    q_clean = re.sub(r"\s+", " ", q.strip().lower())
+    if company:
+        comp = company.strip().lower()
+        if comp not in q_clean:
+            q_clean = f"{comp} {q_clean}"
+    return q_clean
+
+
+def get_cached_answer(db: sqlite3.Connection, question: str, company: str = None) -> dict | None:
+    norm_q = normalize_q(question, company)
+    row = db.execute("""
+        SELECT * FROM qa_cache 
+        WHERE question_normalized = ? 
+          AND created_at >= datetime('now', '-7 days')
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (norm_q,)).fetchone()
+
+    if row:
+        sources = json.loads(row["sources_json"]) if row["sources_json"] else []
+        return {
+            "answer": row["answer"],
+            "sources": sources,
+            "chunks_used": row["chunks_used"],
+            "query_time_ms": 25.0,
+            "intent": row["intent"],
+            "cached": True,
+            "created_at": row["created_at"]
+        }
+    return None
+
+
+def set_cached_answer(db: sqlite3.Connection, question: str, company: str, result: dict):
+    norm_q = normalize_q(question, company)
+    sources_json = json.dumps(result.get("sources", []), ensure_ascii=False)
+    db.execute("""
+        INSERT INTO qa_cache (question_normalized, question_raw, company, answer, sources_json, chunks_used, query_time_ms, intent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(question_normalized) DO UPDATE SET
+            answer=excluded.answer,
+            sources_json=excluded.sources_json,
+            chunks_used=excluded.chunks_used,
+            query_time_ms=excluded.query_time_ms,
+            intent=excluded.intent,
+            created_at=datetime('now')
+    """, (
+        norm_q,
+        question,
+        company or "",
+        result.get("answer", ""),
+        sources_json,
+        result.get("chunks_used", 0),
+        result.get("query_time_ms", 0),
+        result.get("intent", "GENEL"),
+    ))
+    db.commit()
 
 
 def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
@@ -263,6 +347,52 @@ def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
     return facts
 
 
+def extract_dividend_facts(db: sqlite3.Connection, company: str) -> str:
+    comp_str = company.upper()
+    rows = db.execute("""
+        SELECT date, title, text 
+        FROM chunks 
+        WHERE (company = ? OR company LIKE ?)
+          AND (title LIKE '%Kar Payı%' OR text LIKE '%Kar Payı Dağıtım%')
+        ORDER BY date DESC
+        LIMIT 10
+    """, (comp_str, f"%{comp_str}%")).fetchall()
+
+    if not rows:
+        return ""
+
+    taksit_info = []
+
+    for r in rows:
+        text = r["text"]
+
+        tot_match = re.search(r"dağıtılması önerilen toplam ([0-9\.,]+)\s*TL", text, re.IGNORECASE)
+        taksit1_tot = re.search(r"([0-9\.,]+)\s*TL tutarındaki ilk taksit", text, re.IGNORECASE)
+        taksit2_tot = re.search(r"([0-9\.,]+)\s*TL tutarındaki ikinci taksit", text, re.IGNORECASE)
+        taksit1_date = re.search(r"ilk taksit için ödeme tarihinin\s*([0-9A-Za-z\s]+)", text, re.IGNORECASE)
+        taksit2_date = re.search(r"ikinci taksit için ise\s*([0-9A-Za-z\s]+)", text, re.IGNORECASE)
+
+        if tot_match:
+            taksit_info.append(f"• TOPLAM DAĞITILAN NAKİT KAR PAYI: {tot_match.group(1)} TL")
+        if taksit1_tot and taksit1_date:
+            taksit_info.append(f"• 1. TAKSİT TEMETTÜ: {taksit1_tot.group(1)} TL | Ödeme Tarihi: {taksit1_date.group(1).strip()}")
+        if taksit2_tot and taksit2_date:
+            taksit_info.append(f"• 2. TAKSİT TEMETTÜ: {taksit2_tot.group(1)} TL | Ödeme Tarihi: {taksit2_date.group(1).strip()}")
+
+        brut_1 = re.search(r"1\.\s*Taksit\s*\n\s*([0-9,]+)", text)
+        brut_2 = re.search(r"2\.\s*Taksit\s*\n\s*([0-9,]+)", text)
+
+        if brut_1:
+            taksit_info.append(f"• 1. TAKSİT HİSSE BAŞI BRÜT: {brut_1.group(1)} TL")
+        if brut_2:
+            taksit_info.append(f"• 2. TAKSİT HİSSE BAŞI BRÜT: {brut_2.group(1)} TL")
+
+    if taksit_info:
+        unique_facts = list(dict.fromkeys(taksit_info))
+        return "[DOĞRUDAN KAP BİLDİRİMİNDEN HESAPLANAN KESİN TEMETTÜ RAKAMLARI]\n" + "\n".join(unique_facts)
+    return ""
+
+
 def detect_intent(question: str) -> tuple[str, str]:
     q = question.lower()
 
@@ -298,7 +428,8 @@ async def lifespan(app: FastAPI):
     sqlite_vec.load(state.db)
     state.db.enable_load_extension(False)
     state.db.row_factory = sqlite3.Row
-    print(f"[+] DB acildi: {DB_PATH}")
+    init_cache_table(state.db)
+    print(f"[+] DB & Önbellek tablosu acildi: {DB_PATH}")
 
     base_url = get_foundry_base_url()
     state.client = OpenAI(base_url=base_url, api_key="none")
@@ -321,7 +452,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="KAP RAG API",
     description="KAP bildirimleri ve 5 Spesifik Analiz Modlu Finansal Engine + Web UI",
-    version="2.0.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
@@ -367,6 +498,7 @@ class AskRequest(BaseModel):
     company: Optional[str] = Field(None, description="Şirket kodu filtresi (THYAO, AKBNK...)")
     type: Optional[str] = Field(None, description="Bildirim türü filtresi (ODA, FR, DUY)")
     top_k: int = Field(5, ge=1, le=30, description="Getirilecek chunk sayısı")
+    force_refresh: bool = Field(False, description="Önbelleği baypas edip yeniden AI ile üret")
 
 class Source(BaseModel):
     company: str
@@ -385,6 +517,7 @@ class AskResponse(BaseModel):
     chunks_used: int
     query_time_ms: float
     intent: str
+    cached: bool = False
 
 
 @app.post("/api/ask", response_model=AskResponse)
@@ -394,7 +527,26 @@ async def ask(req: AskRequest):
     if not req.question.strip():
         raise HTTPException(400, "Soru boş olamaz")
 
+    # 1. Önbellek Kontrolü (force_refresh = False ise)
+    if not req.force_refresh:
+        cached_res = get_cached_answer(state.db, req.question, req.company)
+        if cached_res:
+            sources_objs = [Source(**s) for s in cached_res["sources"]]
+            return AskResponse(
+                answer=cached_res["answer"],
+                sources=sources_objs,
+                chunks_used=cached_res["chunks_used"],
+                query_time_ms=cached_res["query_time_ms"],
+                intent=cached_res["intent"],
+                cached=True,
+            )
+
+    # 2. Canlı RAG Pipeline
     intent_code, selected_prompt = detect_intent(req.question)
+
+    # Şirket Kodunu Prompt İçine Dinamik Enjekte Et
+    comp_name = req.company.upper() if req.company else "BİST ŞİRKETİ"
+    selected_prompt = selected_prompt.replace("[ŞİRKET_KODU]", comp_name)
 
     real_facts_summary = ""
     matched_chunks = []
@@ -405,6 +557,11 @@ async def ask(req: AskRequest):
         if facts:
             fact_lines = [f"• {k.upper()}: {v}" for k, v in facts.items() if k != "date"]
             real_facts_summary = f"BİLANÇO DÖNEMİ: {facts.get('date')} (Birim: {facts.get('para_birimi')})\nAYIKLANAN GERÇEK VERİLER VE RASYOLAR:\n" + "\n".join(fact_lines)
+
+    elif req.company and intent_code == "TEMETTU":
+        div_facts = extract_dividend_facts(state.db, req.company)
+        if div_facts:
+            real_facts_summary = div_facts
 
     if req.company:
         comp_str = req.company.upper()
@@ -508,11 +665,12 @@ async def ask(req: AskRequest):
             chunks_used=0,
             query_time_ms=round((time.time() - start) * 1000, 1),
             intent=intent_code,
+            cached=False,
         )
 
     context_parts = []
     if real_facts_summary:
-        context_parts.append(f"[DOĞRUDAN GERÇEK BİLANÇO RAKAMLARI VE HESAPLANAN RASYOLAR]\n{real_facts_summary}")
+        context_parts.append(f"[AYIKLANAN DOĞRUDAN KAP BİLGİLERİ VE VERİLER]\n{real_facts_summary}")
 
     for i, chunk in enumerate(matched_chunks):
         header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
@@ -528,7 +686,7 @@ async def ask(req: AskRequest):
             "role": "user",
             "content": f"KAP GERÇEK BİLDİRİM METİNLERİ VE VERİLER:\n{context}\n\n"
                        f"SORU: {req.question}\n\n"
-                       f"Yukarıdaki metinlerde yer alan GERÇEK RAKAMLARI ve TARİHLERİ kullanarak soruyu yanıtla:",
+                       f"Yukarıdaki metinlerde yer alan GERÇEK RAKAMLARI VE TARİHLERİ kullanarak soruyu yanıtla:",
         },
     ]
 
@@ -541,6 +699,12 @@ async def ask(req: AskRequest):
     answer = chat_res.choices[0].message.content
     if "<think>" in answer and "</think>" in answer:
         answer = answer.split("</think>")[-1].strip()
+
+    # Model hallucination post-cleaning: Remove trailing meta-comments if present
+    if "Lütfen bildiğiniz verilerde" in answer:
+        answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
+    if "Varsayılmıyor" in answer and "Yatırımcı Notu" in answer:
+        answer = re.sub(r"Lütfen bildiğiniz.*$", "", answer, flags=re.DOTALL).strip()
 
     seen = set()
     sources = []
@@ -560,12 +724,26 @@ async def ask(req: AskRequest):
                 relevance_rank=i + 1,
             ))
 
+    query_time = (time.time() - start) * 1000
+
+    result_dict = {
+        "answer": answer,
+        "sources": [s.model_dump() for s in sources],
+        "chunks_used": len(matched_chunks),
+        "query_time_ms": round(query_time, 1),
+        "intent": intent_code,
+    }
+
+    # 3. Sonucu qa_cache Tablosuna Kaydet
+    set_cached_answer(state.db, req.question, req.company, result_dict)
+
     return AskResponse(
         answer=answer,
         sources=sources,
         chunks_used=len(matched_chunks),
-        query_time_ms=round((time.time() - start) * 1000, 1),
+        query_time_ms=round(query_time, 1),
         intent=intent_code,
+        cached=False,
     )
 
 
@@ -593,11 +771,14 @@ async def get_stats():
         "SELECT type, COUNT(*) as c FROM chunks GROUP BY type ORDER BY c DESC"
     ).fetchall()
 
+    cache_count = state.db.execute("SELECT COUNT(*) as c FROM qa_cache").fetchone()["c"]
+
     return {
         "total_chunks": total,
         "total_companies": companies,
         "content_chunks": content,
         "pdf_chunks": pdf,
+        "cached_queries": cache_count,
         "type_distribution": {r["type"]: r["c"] for r in types},
         "models": {
             "embedding": EMBEDDING_MODEL,
@@ -616,7 +797,7 @@ async def health():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (5 Analiz Modlu & Web UI)")
+    parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (5 Analiz Modu, Cache & Web UI)")
     parser.add_argument("--host", default="0.0.0.0", help="Sunucu adresi")
     parser.add_argument("--port", type=int, default=8000, help="Port numarası")
     parser.add_argument("--chat-model", default=DEFAULT_CHAT_MODEL, help="Chat LLM modeli")

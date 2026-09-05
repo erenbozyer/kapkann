@@ -1,9 +1,9 @@
 """
-ask_foundry.py — KAP RAG Sorgu Motoru (Niyet Tabanlı 5 Analiz Modu & Gerçek Bilanço Motoru)
+ask_foundry.py — KAP RAG Sorgu Motoru (5 Analiz Modu, SQLite Cache & Gerçek Bilanço Motoru)
 
 SQLite veritabanından doğrudan GERÇEK bilanço kalemlerini ve KAP bildirimlerini çekip,
-kullanıcının sorusuna uygun 5 spesifik analiz modundan (Bilanço, Gelir Tablosu, Temettü/Sermaye, 
-Yeni İş/Yatırım, Genel KAP) birini otomatik seçerek %100 gerçek verilerle rapor üretir.
+kullanıcının sorusuna uygun 5 spesifik analiz modundan birini otomatik seçer.
+qa_cache tablosu sayesinde önbellekleme sunar.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, �
 KURALLAR:
 1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
 2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
+3. Asla metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme!
 
 CEVAP YAPISI:
 📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
@@ -76,24 +77,27 @@ CEVAP YAPISI:
 [3-4 cümlelik detaylı analist değerlendirmesi]"""
 
 PROMPT_TEMETTU = """Sen BİST şirketlerinin temettü (kar payı) ve sermaye artırımı (bedelsiz/bedelli) kararlarını inceleyen kıdemli bir Finansal Analistsin.
-Sana verilen KAP Kar Payı Dağıtım Bildirimi metinlerini kullanarak GERÇEK RAKAMLARLA Kar Payı & Sermaye Raporu üret.
+Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rakamları kullanarak Kar Payı Karnesi üret.
 
-KURALLAR:
-1. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı ("Pay Dışında Sermaye Piyasası Aracı") bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
-2. Eğer 1. Taksit, 2. Taksit gibi taksitli temettü ödemesi varsa, her taksidi ve tarihlerini ayrı satırlar halinde tabloda göster.
-3. Eğer sunulan metinlerde temettü kararı yoksa "Temettü kararı bulunmamaktadır" yaz, kesinlikle borçlanma aracı ödemelerini temettü gibi gösterme.
+ÖNEMLİ KURALLAR:
+1. TABLODAKİ SÜTUNLARA SADECE DOĞRU BİLGİLERİ YAZ:
+   - "Hisse Başı Brüt (TL)": Sadece 10,38 TL, 6,75 TL gibi hisse başına düşen küçük TL tutarlarını yaz. Toplam milyarlık tutarları sakın buraya yazma!
+   - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
+2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
+3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
+4. KESİNLİKLE metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme! Doğrudan tabloyu ve Analist Değerlendirmesini ver ve bitir!
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
 
-| Karar / Taksit Türü | Hisse Başı Brüt TL | Hisse Başı Net TL | Ödeme / Hak Kullanım Tarihi | Toplam Tutar / Oran | Durum |
+| Karar / Taksit Türü | Hisse Başı Brüt (TL) | Hisse Başı Net (TL) | Ödeme / Hak Kullanım Tarihi | Toplam Nakit Kar Payı | Durum |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| 💵 **1. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı / Ödendi] |
-| 💵 **2. Taksit Temettü** | [Tutar] | [Tutar] | [Tarih] | [Toplam TL] | [Genel Kurul Onaylandı] |
-| 📈 **Bedelsiz Sermaye Artırımı** | - | - | [Tarih/Yok] | [% Oran/Yok] | [Varsa Detay] |
+| 💵 **1. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
+| 💵 **2. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
+| 📈 **Bedelsiz Sermaye Artırımı** | - | - | - | % Oran Yok | Varsa Belirtilmedi |
 
 📝 **Yatırımcı Notu & Analist Değerlendirmesi:**
-[2-3 cümlelik net açıklama, toplam temettü tutarı, ödeme tarihleri ve kar dağıtım oranı özeti]"""
+[2-3 cümlelik net açıklama, toplam temettü tutarı, taksit ödeme tarihleri ve karar özeti]"""
 
 PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale sonuçlarını ve yatırım kararlarını inceleyen bir Finansal Analistsin.
 Sana verilen KAP Özel Durum Açıklamalarını (ÖDA) inceleyerek Yeni İş İlişkisi & Yatırım Raporu üret.
@@ -148,6 +152,83 @@ def serialize_f32(vec: list[float]) -> bytes:
     return struct.pack(f"{len(vec)}f", *vec)
 
 
+def init_cache_table(db: sqlite3.Connection):
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS qa_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question_normalized TEXT UNIQUE,
+            question_raw TEXT,
+            company TEXT,
+            answer TEXT,
+            sources_json TEXT,
+            chunks_used INTEGER,
+            query_time_ms REAL,
+            intent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    db.commit()
+
+
+def normalize_q(q: str, company: str = None) -> str:
+    q_clean = re.sub(r"\s+", " ", q.strip().lower())
+    if company:
+        comp = company.strip().lower()
+        if comp not in q_clean:
+            q_clean = f"{comp} {q_clean}"
+    return q_clean
+
+
+def get_cached_answer(db: sqlite3.Connection, question: str, company: str = None) -> dict | None:
+    norm_q = normalize_q(question, company)
+    row = db.execute("""
+        SELECT * FROM qa_cache 
+        WHERE question_normalized = ? 
+          AND created_at >= datetime('now', '-7 days')
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (norm_q,)).fetchone()
+
+    if row:
+        sources = json.loads(row["sources_json"]) if row["sources_json"] else []
+        return {
+            "answer": row["answer"],
+            "sources": sources,
+            "chunks_used": row["chunks_used"],
+            "query_time_ms": 15.0,
+            "intent": row["intent"],
+            "cached": True,
+            "created_at": row["created_at"]
+        }
+    return None
+
+
+def set_cached_answer(db: sqlite3.Connection, question: str, company: str, result: dict):
+    norm_q = normalize_q(question, company)
+    sources_json = json.dumps(result.get("sources", []), ensure_ascii=False)
+    db.execute("""
+        INSERT INTO qa_cache (question_normalized, question_raw, company, answer, sources_json, chunks_used, query_time_ms, intent, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(question_normalized) DO UPDATE SET
+            answer=excluded.answer,
+            sources_json=excluded.sources_json,
+            chunks_used=excluded.chunks_used,
+            query_time_ms=excluded.query_time_ms,
+            intent=excluded.intent,
+            created_at=datetime('now')
+    """, (
+        norm_q,
+        question,
+        company or "",
+        result.get("answer", ""),
+        sources_json,
+        result.get("chunks_used", 0),
+        result.get("query_time_ms", 0),
+        result.get("intent", "GENEL"),
+    ))
+    db.commit()
+
+
 def open_db(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         print(f"❌ Veritabanı bulunamadı: {db_path}")
@@ -158,6 +239,7 @@ def open_db(db_path: str) -> sqlite3.Connection:
     sqlite_vec.load(db)
     db.enable_load_extension(False)
     db.row_factory = sqlite3.Row
+    init_cache_table(db)
     return db
 
 
@@ -263,6 +345,52 @@ def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
     return facts
 
 
+def extract_dividend_facts(db: sqlite3.Connection, company: str) -> str:
+    comp_str = company.upper()
+    rows = db.execute("""
+        SELECT date, title, text 
+        FROM chunks 
+        WHERE (company = ? OR company LIKE ?)
+          AND (title LIKE '%Kar Payı%' OR text LIKE '%Kar Payı Dağıtım%')
+        ORDER BY date DESC
+        LIMIT 10
+    """, (comp_str, f"%{comp_str}%")).fetchall()
+
+    if not rows:
+        return ""
+
+    taksit_info = []
+
+    for r in rows:
+        text = r["text"]
+
+        tot_match = re.search(r"dağıtılması önerilen toplam ([0-9\.,]+)\s*TL", text, re.IGNORECASE)
+        taksit1_tot = re.search(r"([0-9\.,]+)\s*TL tutarındaki ilk taksit", text, re.IGNORECASE)
+        taksit2_tot = re.search(r"([0-9\.,]+)\s*TL tutarındaki ikinci taksit", text, re.IGNORECASE)
+        taksit1_date = re.search(r"ilk taksit için ödeme tarihinin\s*([0-9A-Za-z\s]+)", text, re.IGNORECASE)
+        taksit2_date = re.search(r"ikinci taksit için ise\s*([0-9A-Za-z\s]+)", text, re.IGNORECASE)
+
+        if tot_match:
+            taksit_info.append(f"• TOPLAM DAĞITILAN NAKİT KAR PAYI: {tot_match.group(1)} TL")
+        if taksit1_tot and taksit1_date:
+            taksit_info.append(f"• 1. TAKSİT TEMETTÜ: {taksit1_tot.group(1)} TL | Ödeme Tarihi: {taksit1_date.group(1).strip()}")
+        if taksit2_tot and taksit2_date:
+            taksit_info.append(f"• 2. TAKSİT TEMETTÜ: {taksit2_tot.group(1)} TL | Ödeme Tarihi: {taksit2_date.group(1).strip()}")
+
+        brut_1 = re.search(r"1\.\s*Taksit\s*\n\s*([0-9,]+)", text)
+        brut_2 = re.search(r"2\.\s*Taksit\s*\n\s*([0-9,]+)", text)
+
+        if brut_1:
+            taksit_info.append(f"• 1. TAKSİT HİSSE BAŞI BRÜT: {brut_1.group(1)} TL")
+        if brut_2:
+            taksit_info.append(f"• 2. TAKSİT HİSSE BAŞI BRÜT: {brut_2.group(1)} TL")
+
+    if taksit_info:
+        unique_facts = list(dict.fromkeys(taksit_info))
+        return "[DOĞRUDAN KAP BİLDİRİMİNDEN HESAPLANAN KESİN TEMETTÜ RAKAMLARI]\n" + "\n".join(unique_facts)
+    return ""
+
+
 def detect_intent(question: str) -> tuple[str, str]:
     q = question.lower()
 
@@ -293,23 +421,36 @@ def ask_kap(
     company_filter: str = None,
     type_filter: str = None,
     top_k: int = 5,
+    force_refresh: bool = False,
 ) -> dict:
     start = time.time()
 
+    # Önbellek kontrolü
+    if not force_refresh:
+        cached = get_cached_answer(db, question, company_filter)
+        if cached:
+            return cached
+
     intent_code, selected_prompt = detect_intent(question)
+
+    comp_name = company_filter.upper() if company_filter else "BİST ŞİRKETİ"
+    selected_prompt = selected_prompt.replace("[ŞİRKET_KODU]", comp_name)
 
     real_facts_summary = ""
     matched_chunks = []
     seen_ids = set()
 
-    # Gerçek bilanço verisi ayıklama (Bilanço ve Gelir modlarında)
     if company_filter and intent_code in ("BILANCO", "GELIR"):
         facts = extract_real_financial_facts(db, company_filter)
         if facts:
             fact_lines = [f"• {k.upper()}: {v}" for k, v in facts.items() if k != "date"]
             real_facts_summary = f"BİLANÇO DÖNEMİ: {facts.get('date')} (Birim: {facts.get('para_birimi')})\nAYIKLANAN GERÇEK VERİLER VE RASYOLAR:\n" + "\n".join(fact_lines)
 
-    # Niyete özel hassas başlık filtresi
+    elif company_filter and intent_code == "TEMETTU":
+        div_facts = extract_dividend_facts(db, company_filter)
+        if div_facts:
+            real_facts_summary = div_facts
+
     if company_filter:
         comp_str = company_filter.upper()
 
@@ -329,7 +470,6 @@ def ask_kap(
                     matched_chunks.append(r)
 
         elif intent_code == "TEMETTU":
-            # Kar Payı ve Temettü bildirimlerini doğrudan başlığa göre filtrele!
             rows = db.execute(
                 """
                 SELECT * FROM chunks 
@@ -346,7 +486,6 @@ def ask_kap(
                     matched_chunks.append(r)
 
         elif intent_code == "YATIRIM":
-            # Yeni iş ve Yatırım bildirimlerini doğrudan başlığa göre filtrele!
             rows = db.execute(
                 """
                 SELECT * FROM chunks 
@@ -362,7 +501,6 @@ def ask_kap(
                     seen_ids.add(r["id"])
                     matched_chunks.append(r)
 
-    # Vektör Araması ile Destekleme
     if len(matched_chunks) < top_k:
         subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
         q_res = client.embeddings.create(model=EMBEDDING_MODEL, input=question)
@@ -416,11 +554,12 @@ def ask_kap(
             "chunks_used": 0,
             "query_time_ms": round((time.time() - start) * 1000, 1),
             "intent": intent_code,
+            "cached": False,
         }
 
     context_parts = []
     if real_facts_summary:
-        context_parts.append(f"[DOĞRUDAN GERÇEK BİLANÇO RAKAMLARI VE HESAPLANAN RASYOLAR]\n{real_facts_summary}")
+        context_parts.append(f"[AYIKLANAN DOĞRUDAN KAP BİLGİLERİ VE VERİLER]\n{real_facts_summary}")
 
     for i, chunk in enumerate(matched_chunks):
         header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
@@ -436,7 +575,7 @@ def ask_kap(
             "role": "user",
             "content": f"KAP GERÇEK BİLDİRİM METİNLERİ VE VERİLER:\n{context}\n\n"
                        f"SORU: {question}\n\n"
-                       f"Yukarıdaki metinlerde yer alan GERÇEK RAKAMLARI ve TARİHLERİ kullanarak soruyu yanıtla:",
+                       f"Yukarıdaki metinlerde yer alan GERÇEK RAKAMLARI VE TARİHLERİ kullanarak soruyu yanıtla:",
         },
     ]
 
@@ -449,6 +588,9 @@ def ask_kap(
     answer = chat_res.choices[0].message.content
     if "<think>" in answer and "</think>" in answer:
         answer = answer.split("</think>")[-1].strip()
+
+    if "Lütfen bildiğiniz verilerde" in answer:
+        answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
 
     seen_sources = set()
     sources = []
@@ -471,17 +613,23 @@ def ask_kap(
 
     query_time = (time.time() - start) * 1000
 
-    return {
+    res_dict = {
         "answer": answer,
         "sources": sources,
         "chunks_used": len(matched_chunks),
         "query_time_ms": round(query_time, 1),
         "intent": intent_code,
+        "cached": False,
     }
+
+    set_cached_answer(db, question, company_filter, res_dict)
+    return res_dict
 
 
 def print_result(result: dict):
     print(f"\n{'='*60}")
+    cache_tag = "⚡ [ÖNBELLEKTEN GETİRİLDİ]" if result.get("cached") else "🤖 [CANLI AI TARAFINDAN ÜRETİLDİ]"
+    print(f"{cache_tag}")
     print(f"🎯 Mod (Intent): {result.get('intent', 'GENEL')}")
     print(f"📝 Cevap:\n")
     print(result["answer"])
@@ -492,7 +640,7 @@ def print_result(result: dict):
     for i, src in enumerate(result["sources"]):
         icon = "📊" if src["type"] == "FR" else ("📄" if src["type"] == "ODA" else "📜")
         line = f"  {i+1}. {icon} [{src['date']}] {src['company']} ({src['type']}) — {src['title']}"
-        if src["source_type"] == "pdf_attachment" and src["attachment_filename"]:
+        if src.get("source_type") == "pdf_attachment" and src.get("attachment_filename"):
             line += f"\n     📁 PDF: {src['attachment_filename']}"
         line += f"\n     🔗 {src['url']}"
         print(line)
@@ -503,11 +651,12 @@ def print_result(result: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="KAP RAG Sorgu Motoru (5 Analiz Modu)")
+    parser = argparse.ArgumentParser(description="KAP RAG Sorgu Motoru (5 Analiz Modu, Cache Desteği)")
     parser.add_argument("question", nargs="?", help="Sorulacak soru")
     parser.add_argument("--company", "-c", help="Şirket kodu filtresi (THYAO, AKBNK...)")
     parser.add_argument("--type", "-t", help="Bildirim türü filtresi (ODA, FR, DUY)")
     parser.add_argument("--top-k", "-k", type=int, default=5, help="Getirilecek chunk sayısı")
+    parser.add_argument("--force-refresh", action="store_true", help="Önbelleği baypas et")
     parser.add_argument("--db", default=DB_PATH, help="Vektör DB yolu")
     parser.add_argument("--chat-model", default=CHAT_MODEL, help="Chat LLM modeli")
     args = parser.parse_args()
@@ -526,6 +675,7 @@ def main():
         company_filter=args.company,
         type_filter=args.type,
         top_k=args.top_k,
+        force_refresh=args.force_refresh,
     )
     print_result(result)
 

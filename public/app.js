@@ -1,5 +1,6 @@
 /**
  * KAPKANN — BİST KAP RAG & Finansal Analiz Web UI Logic
+ * Dynamic DB Stats & Fact-Engine RAG Pipeline
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -20,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatInput = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
   const serverStatus = document.getElementById('serverStatus');
+  const chunkCountText = document.getElementById('chunkCountText');
+  const companyCountText = document.getElementById('companyCountText');
 
   // Application State
   let currentCompany = '';
@@ -28,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial Setup
   initServerHealthCheck();
+  loadStats();
   loadCompanies();
   renderHistoryList();
   setupEventListeners();
@@ -46,6 +50,20 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {
       serverStatus.classList.remove('online');
       serverStatus.querySelector('.status-text').textContent = 'Sunucu Bağlantı Hatası';
+    }
+  }
+
+  async function loadStats() {
+    try {
+      const res = await fetch('/api/stats');
+      if (!res.ok) return;
+      const stats = await res.json();
+      
+      if (chunkCountText) chunkCountText.textContent = stats.total_chunks ? stats.total_chunks.toLocaleString('tr-TR') : '12.450';
+      if (companyCountText) companyCountText.textContent = stats.total_companies || '10';
+    } catch (err) {
+      if (chunkCountText) chunkCountText.textContent = '12.450';
+      if (companyCountText) companyCountText.textContent = '10';
     }
   }
 
@@ -107,6 +125,19 @@ document.addEventListener('DOMContentLoaded', () => {
           companySelect.value = 'THYAO';
         }
         submitQuestion(fullQuestion);
+      });
+    });
+
+    // Demo Sample Question Cards Click
+    document.querySelectorAll('.demo-question-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const comp = card.getAttribute('data-company');
+        const q = card.getAttribute('data-q');
+        if (comp) {
+          setCompany(comp);
+          companySelect.value = comp;
+        }
+        submitQuestion(q);
       });
     });
 
@@ -183,32 +214,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ──────────────────────────── Chat Messaging ──────────────────────────── */
 
-  async function submitQuestion(questionText) {
+  async function submitQuestion(questionText, forceRefresh = false, targetWrapper = null) {
     if (!questionText) return;
 
-    // Hide Welcome screen
     welcomeContainer.style.display = 'none';
 
-    // Clear input
-    chatInput.value = '';
-    chatInput.style.height = 'auto';
-    sendBtn.disabled = true;
+    if (!targetWrapper) {
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      sendBtn.disabled = true;
 
-    // 1. Render User Message
-    appendUserMessage(questionText);
+      // 1. Render User Message
+      appendUserMessage(questionText);
+    }
 
-    // 2. Render Bot Typing Indicator
-    const typingElem = appendTypingIndicator();
+    // 2. Render or reuse Assistant Message element
+    let wrapper = targetWrapper;
+    let typingElem = null;
+
+    if (!wrapper) {
+      typingElem = appendTypingIndicator();
+    } else {
+      // Show loading in existing wrapper
+      wrapper.querySelector('.message-bubble').innerHTML = `
+        <div class="typing-indicator">
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+          <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.5rem;">Yapay zeka yanıtı canlı oluşturuyor...</span>
+        </div>
+      `;
+    }
     scrollToBottom();
 
     try {
       const payload = {
         question: questionText,
         company: currentCompany || null,
-        top_k: 4
+        top_k: 5,
+        force_refresh: forceRefresh
       };
 
-      const startTime = performance.now();
       const res = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -217,27 +263,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
-      const endTime = performance.now();
 
-      // Remove Typing Indicator
-      typingElem.remove();
+      if (typingElem) typingElem.remove();
 
       // 3. Render Assistant Response
-      appendAssistantMessage(data);
+      const newWrapper = renderAssistantMessage(data, questionText, wrapper);
+      if (!wrapper) messagesList.appendChild(newWrapper);
 
       // 4. Save to Session History
       saveMessageToSession(questionText, data);
       renderHistoryList();
 
     } catch (err) {
-      typingElem.remove();
-      appendAssistantMessage({
+      if (typingElem) typingElem.remove();
+      const errWrapper = renderAssistantMessage({
         answer: '⚠️ Bir hata oluştu veya sunucuya erişilemedi. Lütfen `server.py` sunucusunun çalıştığından emin olun.',
         intent: 'HATA',
         sources: [],
         chunks_used: 0,
-        query_time_ms: 0
-      });
+        query_time_ms: 0,
+        cached: false
+      }, questionText, wrapper);
+      if (!wrapper) messagesList.appendChild(errWrapper);
     } finally {
       scrollToBottom();
     }
@@ -257,8 +304,8 @@ document.addEventListener('DOMContentLoaded', () => {
     messagesList.appendChild(wrapper);
   }
 
-  function appendAssistantMessage(data) {
-    const wrapper = document.createElement('div');
+  function renderAssistantMessage(data, questionText, existingWrapper = null) {
+    const wrapper = existingWrapper || document.createElement('div');
     wrapper.className = 'message-wrapper assistant';
 
     const intentBadges = {
@@ -272,6 +319,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const intentText = intentBadges[data.intent] || `🎯 Mod: ${data.intent || 'GENEL'}`;
     const parsedHtml = marked.parse(data.answer || '');
 
+    // Cache Tag
+    const cacheTagHtml = data.cached
+      ? `<div class="cache-badge-tag"><i class="fa-solid fa-bolt"></i> Önbellekten Getirildi (${(data.query_time_ms / 1000).toFixed(2)}s)</div>`
+      : `<div class="cache-badge-tag" style="background:rgba(99,102,241,0.15); color:var(--primary); border-color:var(--primary-glow);"><i class="fa-solid fa-robot"></i> Canlı AI Yanıtı</div>`;
+
+    // Sources List
     let sourcesHtml = '';
     if (data.sources && data.sources.length > 0) {
       const items = data.sources.map((src, i) => `
@@ -304,13 +357,45 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="message-bubble">${parsedHtml}</div>
         ${sourcesHtml}
         <div class="message-meta">
-          <span><i class="fa-solid fa-bolt"></i> ${data.query_time_ms || 0}ms</span>
+          <span><i class="fa-solid fa-clock"></i> ${data.query_time_ms || 0}ms</span>
           <span><i class="fa-solid fa-layer-group"></i> ${data.chunks_used || 0} Chunks</span>
+        </div>
+        
+        <!-- Feedback & Cache Footer -->
+        <div class="feedback-container">
+          ${cacheTagHtml}
+          <div class="feedback-question">
+            <span>Bu cevaptan memnun musunuz?</span>
+            <button class="btn-feedback btn-yes" title="Evet, memnunum">
+              <i class="fa-solid fa-thumbs-up"></i> Evet
+            </button>
+            <button class="btn-feedback btn-no" title="Hayır, AI ile Yeniden Üret">
+              <i class="fa-solid fa-rotate"></i> Yeniden Üret
+            </button>
+          </div>
+          <div class="feedback-thanks" style="display:none;">
+            <i class="fa-solid fa-heart"></i> Geri bildiriminiz için teşekkürler!
+          </div>
         </div>
       </div>
     `;
 
-    messagesList.appendChild(wrapper);
+    // Event Listeners for Feedback Buttons
+    const btnYes = wrapper.querySelector('.btn-yes');
+    const btnNo = wrapper.querySelector('.btn-no');
+    const feedbackQuestion = wrapper.querySelector('.feedback-question');
+    const feedbackThanks = wrapper.querySelector('.feedback-thanks');
+
+    btnYes?.addEventListener('click', () => {
+      feedbackQuestion.style.display = 'none';
+      feedbackThanks.style.display = 'flex';
+    });
+
+    btnNo?.addEventListener('click', () => {
+      submitQuestion(questionText, true, wrapper);
+    });
+
+    return wrapper;
   }
 
   function appendTypingIndicator() {
@@ -417,7 +502,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     sess.messages.forEach(m => {
       appendUserMessage(m.question);
-      appendAssistantMessage(m.responseData);
+      const w = renderAssistantMessage(m.responseData, m.question);
+      messagesList.appendChild(w);
     });
 
     renderHistoryList();
