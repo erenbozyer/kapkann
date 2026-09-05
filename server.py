@@ -1,9 +1,8 @@
 """
-server.py — KAP RAG FastAPI Backend (5 Analiz Modu, SQLite Fact Engine & Web UI)
+server.py — KAP RAG FastAPI Backend (Groq API / Local Foundry + 5 Analiz Modu + Web UI)
 
-REST API ve Modern Web UI ile KAP RAG sistemini dışarıya açar.
-SQLite qa_cache tablosu ile önbellekleme ve "Yeniden Üret" desteği sunar.
-Foundry Local (phi-4-mini & qwen3-embedding-0.6b) üzerinde çalışır.
+Groq API (qwen/qwen3.6-27b) veya yerel Foundry (phi-4-mini)
+üzerinde çalışarak KAP bildirimlerinden %100 gerçek verilerle finansal raporlar üretir.
 """
 
 from __future__ import annotations
@@ -36,7 +35,9 @@ import uvicorn
 DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__) or ".", "public")
 EMBEDDING_MODEL = "qwen3-embedding-0.6b"
-DEFAULT_CHAT_MODEL = "phi-4-mini"
+LOCAL_CHAT_MODEL = "phi-4-mini"
+GROQ_CHAT_MODEL = "qwen/qwen3.6-27b"
+DEFAULT_GROQ_KEY = "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"
 
 # ──────────────────────────── System Prompts ────────────────────────────
 
@@ -46,7 +47,7 @@ Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, �
 KURALLAR:
 1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
 2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
-3. Asla metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme!
+3. SADECE AŞAĞIDAKİ CEVAP YAPISINI KULLANARAK YANIT VER.
 
 CEVAP YAPISI:
 📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
@@ -91,7 +92,7 @@ Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rak
    - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
 2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
 3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
-4. KESİNLİKLE metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme! Doğrudan tabloyu ve Analist Değerlendirmesini ver ve bitir!
+4. SADECE AŞAĞIDAKİ CEVAP YAPISINI KULLANARAK YANIT VER.
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
@@ -154,10 +155,24 @@ def get_foundry_base_url() -> str:
     return "http://127.0.0.1:59812/v1"
 
 
+def get_chat_client(groq_key: str = None) -> tuple[OpenAI, str, str]:
+    key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
+    if key and key.strip():
+        client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
+        model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
+        return client, model_name, f"Groq Cloud ({model_name})"
+
+    base_url = get_foundry_base_url()
+    client = OpenAI(base_url=base_url, api_key="none")
+    return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
+
+
 class AppState:
     db: sqlite3.Connection = None
     client: OpenAI = None
-    chat_model_name: str = DEFAULT_CHAT_MODEL
+    chat_model_name: str = LOCAL_CHAT_MODEL
+    provider_name: str = "Local Foundry"
+    groq_key: Optional[str] = DEFAULT_GROQ_KEY
 
 state = AppState()
 
@@ -417,7 +432,7 @@ def detect_intent(question: str) -> tuple[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[+] DB ve OpenAI Client baslatiliyor...")
+    print("[+] DB ve LLM Client baslatiliyor...")
 
     if not os.path.exists(DB_PATH):
         print(f"[-] Veritabani bulunamadi: {DB_PATH}")
@@ -431,14 +446,8 @@ async def lifespan(app: FastAPI):
     init_cache_table(state.db)
     print(f"[+] DB & Önbellek tablosu acildi: {DB_PATH}")
 
-    base_url = get_foundry_base_url()
-    state.client = OpenAI(base_url=base_url, api_key="none")
-
-    try:
-        res = state.client.embeddings.create(model=EMBEDDING_MODEL, input="health")
-        print(f"[+] Foundry Local Server baglantisi basarili ({base_url})")
-    except Exception as e:
-        print(f"[-] Foundry Server uyarisi: {e}")
+    state.client, state.chat_model_name, state.provider_name = get_chat_client(state.groq_key)
+    print(f"[+] LLM Sağlayıcısı: {state.provider_name} | Model: {state.chat_model_name}")
 
     print("\n[+] KAP RAG Sunucu hazir!\n")
 
@@ -451,8 +460,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="KAP RAG API",
-    description="KAP bildirimleri ve 5 Spesifik Analiz Modlu Finansal Engine + Web UI",
-    version="2.2.0",
+    description="Groq API (qwen/qwen3.6-27b) & Local Foundry Destekli BİST RAG Engine + Web UI",
+    version="2.3.0",
     lifespan=lifespan,
 )
 
@@ -527,7 +536,6 @@ async def ask(req: AskRequest):
     if not req.question.strip():
         raise HTTPException(400, "Soru boş olamaz")
 
-    # 1. Önbellek Kontrolü (force_refresh = False ise)
     if not req.force_refresh:
         cached_res = get_cached_answer(state.db, req.question, req.company)
         if cached_res:
@@ -541,10 +549,8 @@ async def ask(req: AskRequest):
                 cached=True,
             )
 
-    # 2. Canlı RAG Pipeline
     intent_code, selected_prompt = detect_intent(req.question)
 
-    # Şirket Kodunu Prompt İçine Dinamik Enjekte Et
     comp_name = req.company.upper() if req.company else "BİST ŞİRKETİ"
     selected_prompt = selected_prompt.replace("[ŞİRKET_KODU]", comp_name)
 
@@ -614,47 +620,51 @@ async def ask(req: AskRequest):
                     matched_chunks.append(r)
 
     if len(matched_chunks) < req.top_k:
-        subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
-        q_res = state.client.embeddings.create(model=EMBEDDING_MODEL, input=req.question)
-        subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
+        emb_client, _, _ = get_chat_client(groq_key=None)
+        try:
+            subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
+            q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=req.question)
+            subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
 
-        q_embedding = q_res.data[0].embedding
-        q_blob = serialize_f32(q_embedding)
+            q_embedding = q_res.data[0].embedding
+            q_blob = serialize_f32(q_embedding)
 
-        fetch_count = req.top_k * 15 if (req.company or req.type) else req.top_k * 5
-        vec_rows = state.db.execute(
-            """
-            SELECT v.id, v.distance
-            FROM vec_chunks v
-            WHERE v.embedding MATCH ?
-            ORDER BY v.distance
-            LIMIT ?
-            """,
-            (q_blob, fetch_count),
-        ).fetchall()
+            fetch_count = req.top_k * 15 if (req.company or req.type) else req.top_k * 5
+            vec_rows = state.db.execute(
+                """
+                SELECT v.id, v.distance
+                FROM vec_chunks v
+                WHERE v.embedding MATCH ?
+                ORDER BY v.distance
+                LIMIT ?
+                """,
+                (q_blob, fetch_count),
+            ).fetchall()
 
-        if vec_rows:
-            candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
-            if candidate_ids:
-                placeholders = ",".join(["?" for _ in candidate_ids])
-                sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
-                params = list(candidate_ids)
+            if vec_rows:
+                candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
+                if candidate_ids:
+                    placeholders = ",".join(["?" for _ in candidate_ids])
+                    sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
+                    params = list(candidate_ids)
 
-                if req.company:
-                    sql += " AND (company = ? OR company LIKE ?)"
-                    params.extend([req.company.upper(), f"%{req.company.upper()}%"])
-                if req.type:
-                    sql += " AND type = ?"
-                    params.append(req.type.upper())
+                    if req.company:
+                        sql += " AND (company = ? OR company LIKE ?)"
+                        params.extend([req.company.upper(), f"%{req.company.upper()}%"])
+                    if req.type:
+                        sql += " AND type = ?"
+                        params.append(req.type.upper())
 
-                sql += " ORDER BY date DESC"
-                vec_matched = state.db.execute(sql, params).fetchall()
-                for r in vec_matched:
-                    if r["id"] not in seen_ids:
-                        seen_ids.add(r["id"])
-                        matched_chunks.append(r)
-                        if len(matched_chunks) >= req.top_k:
-                            break
+                    sql += " ORDER BY date DESC"
+                    vec_matched = state.db.execute(sql, params).fetchall()
+                    for r in vec_matched:
+                        if r["id"] not in seen_ids:
+                            seen_ids.add(r["id"])
+                            matched_chunks.append(r)
+                            if len(matched_chunks) >= req.top_k:
+                                break
+        except Exception as e:
+            print(f"[-] Vektör arama uyarısı: {e}")
 
     matched_chunks = matched_chunks[:req.top_k]
 
@@ -679,7 +689,9 @@ async def ask(req: AskRequest):
 
     context = "\n\n---\n\n".join(context_parts)
 
-    subprocess.run(["foundry", "model", "load", state.chat_model_name], capture_output=True)
+    if "groq.com" not in str(state.client.base_url):
+        subprocess.run(["foundry", "model", "load", state.chat_model_name], capture_output=True)
+
     messages = [
         {"role": "system", "content": selected_prompt},
         {
@@ -697,14 +709,25 @@ async def ask(req: AskRequest):
         temperature=0.1,
     )
     answer = chat_res.choices[0].message.content
-    if "<think>" in answer and "</think>" in answer:
+    
+    # Clean reasoning blocks (<think> or numbered internal CoT steps)
+    if "</think>" in answer:
         answer = answer.split("</think>")[-1].strip()
+    elif "<think>" in answer:
+        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
 
-    # Model hallucination post-cleaning: Remove trailing meta-comments if present
+    # Extract clean response starting at title emoji / markdown header
+    for header_symbol in ["📋", "📈", "💰", "🤝", "⭐", "# "]:
+        if header_symbol in answer:
+            answer = header_symbol + answer.split(header_symbol, 1)[-1]
+            break
+
+    # Clean any trailing prompt quotation leftover
+    if answer.endswith("'. Never include English thinking steps or internal logic in t"):
+        answer = answer.replace("'. Never include English thinking steps or internal logic in t", "").strip()
+
     if "Lütfen bildiğiniz verilerde" in answer:
         answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
-    if "Varsayılmıyor" in answer and "Yatırımcı Notu" in answer:
-        answer = re.sub(r"Lütfen bildiğiniz.*$", "", answer, flags=re.DOTALL).strip()
 
     seen = set()
     sources = []
@@ -734,7 +757,6 @@ async def ask(req: AskRequest):
         "intent": intent_code,
     }
 
-    # 3. Sonucu qa_cache Tablosuna Kaydet
     set_cached_answer(state.db, req.question, req.company, result_dict)
 
     return AskResponse(
@@ -779,11 +801,9 @@ async def get_stats():
         "content_chunks": content,
         "pdf_chunks": pdf,
         "cached_queries": cache_count,
+        "provider": state.provider_name,
+        "model": state.chat_model_name,
         "type_distribution": {r["type"]: r["c"] for r in types},
-        "models": {
-            "embedding": EMBEDDING_MODEL,
-            "chat": state.chat_model_name,
-        },
     }
 
 
@@ -793,17 +813,19 @@ async def health():
         "status": "ok",
         "db_connected": state.db is not None,
         "client_ready": state.client is not None,
+        "provider": state.provider_name,
+        "model": state.chat_model_name,
     }
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (5 Analiz Modu, Cache & Web UI)")
+    parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (Groq API & Local Foundry)")
     parser.add_argument("--host", default="0.0.0.0", help="Sunucu adresi")
     parser.add_argument("--port", type=int, default=8000, help="Port numarası")
-    parser.add_argument("--chat-model", default=DEFAULT_CHAT_MODEL, help="Chat LLM modeli")
+    parser.add_argument("--groq-key", default=DEFAULT_GROQ_KEY, help="Groq API anahtarı (gsk_...)")
     args = parser.parse_args()
 
-    state.chat_model_name = args.chat_model
+    state.groq_key = args.groq_key
 
     uvicorn.run(
         "server:app",

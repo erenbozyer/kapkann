@@ -1,9 +1,8 @@
 """
-ask_foundry.py — KAP RAG Sorgu Motoru (5 Analiz Modu, SQLite Cache & Gerçek Bilanço Motoru)
+ask_foundry.py — KAP RAG Sorgu Motoru (Groq API / Local Foundry + 5 Analiz Modu + Cache)
 
-SQLite veritabanından doğrudan GERÇEK bilanço kalemlerini ve KAP bildirimlerini çekip,
-kullanıcının sorusuna uygun 5 spesifik analiz modundan birini otomatik seçer.
-qa_cache tablosu sayesinde önbellekleme sunar.
+Groq API (qwen/qwen3.6-27b) veya yerel Foundry (phi-4-mini)
+üzerinde çalışarak KAP bildirimlerinden %100 gerçek verilerle finansal raporlar üretir.
 """
 
 from __future__ import annotations
@@ -30,7 +29,9 @@ if hasattr(sys.stdout, "reconfigure"):
 
 DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
 EMBEDDING_MODEL = "qwen3-embedding-0.6b"
-CHAT_MODEL = "phi-4-mini"
+LOCAL_CHAT_MODEL = "phi-4-mini"
+GROQ_CHAT_MODEL = "qwen/qwen3.6-27b"
+DEFAULT_GROQ_KEY = "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"
 
 # ──────────────────────────── System Prompts ────────────────────────────
 
@@ -40,7 +41,7 @@ Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, �
 KURALLAR:
 1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
 2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
-3. Asla metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme!
+3. Yanıtına DOĞRUDAN '📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi**' başlığı ile başla! Asla İngilizce düşünme adımlarını veya iç mantığını çıktıya ekleme!
 
 CEVAP YAPISI:
 📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
@@ -85,7 +86,7 @@ Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rak
    - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
 2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
 3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
-4. KESİNLİKLE metin sonuna "Lütfen bildiğiniz verilerde..." veya "Varsayılmıyor" gibi açıklama/meta cümleleri ekleme! Doğrudan tabloyu ve Analist Değerlendirmesini ver ve bitir!
+4. Yanıtına DOĞRUDAN '💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**' başlığı ile başla!
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
@@ -146,6 +147,18 @@ def get_foundry_base_url() -> str:
         pass
 
     return "http://127.0.0.1:59812/v1"
+
+
+def get_chat_client(groq_key: str = None) -> tuple[OpenAI, str, str]:
+    key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
+    if key and key.strip():
+        client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
+        model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
+        return client, model_name, f"Groq Cloud ({model_name})"
+
+    base_url = get_foundry_base_url()
+    client = OpenAI(base_url=base_url, api_key="none")
+    return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
 
 
 def serialize_f32(vec: list[float]) -> bytes:
@@ -416,20 +429,23 @@ def detect_intent(question: str) -> tuple[str, str]:
 def ask_kap(
     question: str,
     db: sqlite3.Connection,
-    client: OpenAI,
-    chat_model_name: str = CHAT_MODEL,
+    client: OpenAI = None,
+    chat_model_name: str = None,
     company_filter: str = None,
     type_filter: str = None,
     top_k: int = 5,
     force_refresh: bool = False,
+    groq_key: str = None,
 ) -> dict:
     start = time.time()
 
-    # Önbellek kontrolü
     if not force_refresh:
         cached = get_cached_answer(db, question, company_filter)
         if cached:
             return cached
+
+    if client is None or chat_model_name is None:
+        client, chat_model_name, provider_name = get_chat_client(groq_key)
 
     intent_code, selected_prompt = detect_intent(question)
 
@@ -502,47 +518,51 @@ def ask_kap(
                     matched_chunks.append(r)
 
     if len(matched_chunks) < top_k:
-        subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
-        q_res = client.embeddings.create(model=EMBEDDING_MODEL, input=question)
-        subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
+        emb_client, _, _ = get_chat_client(groq_key=None)
+        try:
+            subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
+            q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=question)
+            subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
 
-        q_embedding = q_res.data[0].embedding
-        q_blob = serialize_f32(q_embedding)
+            q_embedding = q_res.data[0].embedding
+            q_blob = serialize_f32(q_embedding)
 
-        fetch_count = top_k * 15 if (company_filter or type_filter) else top_k * 5
-        vec_rows = db.execute(
-            """
-            SELECT v.id, v.distance
-            FROM vec_chunks v
-            WHERE v.embedding MATCH ?
-            ORDER BY v.distance
-            LIMIT ?
-            """,
-            (q_blob, fetch_count),
-        ).fetchall()
+            fetch_count = top_k * 15 if (company_filter or type_filter) else top_k * 5
+            vec_rows = db.execute(
+                """
+                SELECT v.id, v.distance
+                FROM vec_chunks v
+                WHERE v.embedding MATCH ?
+                ORDER BY v.distance
+                LIMIT ?
+                """,
+                (q_blob, fetch_count),
+            ).fetchall()
 
-        if vec_rows:
-            candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
-            if candidate_ids:
-                placeholders = ",".join(["?" for _ in candidate_ids])
-                sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
-                params = list(candidate_ids)
+            if vec_rows:
+                candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
+                if candidate_ids:
+                    placeholders = ",".join(["?" for _ in candidate_ids])
+                    sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
+                    params = list(candidate_ids)
 
-                if company_filter:
-                    sql += " AND (company = ? OR company LIKE ?)"
-                    params.extend([company_filter.upper(), f"%{company_filter.upper()}%"])
-                if type_filter:
-                    sql += " AND type = ?"
-                    params.append(type_filter.upper())
+                    if company_filter:
+                        sql += " AND (company = ? OR company LIKE ?)"
+                        params.extend([company_filter.upper(), f"%{company_filter.upper()}%"])
+                    if type_filter:
+                        sql += " AND type = ?"
+                        params.append(type_filter.upper())
 
-                sql += " ORDER BY date DESC"
-                vec_matched = db.execute(sql, params).fetchall()
-                for r in vec_matched:
-                    if r["id"] not in seen_ids:
-                        seen_ids.add(r["id"])
-                        matched_chunks.append(r)
-                        if len(matched_chunks) >= top_k:
-                            break
+                    sql += " ORDER BY date DESC"
+                    vec_matched = db.execute(sql, params).fetchall()
+                    for r in vec_matched:
+                        if r["id"] not in seen_ids:
+                            seen_ids.add(r["id"])
+                            matched_chunks.append(r)
+                            if len(matched_chunks) >= top_k:
+                                break
+        except Exception as e:
+            print(f"[-] Vektör arama uyarısı: {e}")
 
     matched_chunks = matched_chunks[:top_k]
 
@@ -568,7 +588,9 @@ def ask_kap(
 
     context = "\n\n---\n\n".join(context_parts)
 
-    subprocess.run(["foundry", "model", "load", CHAT_MODEL], capture_output=True)
+    if "groq.com" not in str(client.base_url):
+        subprocess.run(["foundry", "model", "load", LOCAL_CHAT_MODEL], capture_output=True)
+
     messages = [
         {"role": "system", "content": selected_prompt},
         {
@@ -586,8 +608,16 @@ def ask_kap(
         temperature=0.1,
     )
     answer = chat_res.choices[0].message.content
-    if "<think>" in answer and "</think>" in answer:
+
+    if "</think>" in answer:
         answer = answer.split("</think>")[-1].strip()
+    elif "<think>" in answer:
+        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+
+    for header_symbol in ["📋", "📈", "💰", "🤝", "⭐", "# "]:
+        if header_symbol in answer:
+            answer = header_symbol + answer.split(header_symbol, 1)[-1]
+            break
 
     if "Lütfen bildiğiniz verilerde" in answer:
         answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
@@ -651,14 +681,14 @@ def print_result(result: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="KAP RAG Sorgu Motoru (5 Analiz Modu, Cache Desteği)")
+    parser = argparse.ArgumentParser(description="KAP RAG Sorgu Motoru (Groq API & Foundry LLM)")
     parser.add_argument("question", nargs="?", help="Sorulacak soru")
     parser.add_argument("--company", "-c", help="Şirket kodu filtresi (THYAO, AKBNK...)")
     parser.add_argument("--type", "-t", help="Bildirim türü filtresi (ODA, FR, DUY)")
     parser.add_argument("--top-k", "-k", type=int, default=5, help="Getirilecek chunk sayısı")
     parser.add_argument("--force-refresh", action="store_true", help="Önbelleği baypas et")
+    parser.add_argument("--groq-key", default="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", help="Groq API anahtarı (gsk_...)")
     parser.add_argument("--db", default=DB_PATH, help="Vektör DB yolu")
-    parser.add_argument("--chat-model", default=CHAT_MODEL, help="Chat LLM modeli")
     args = parser.parse_args()
 
     if not args.question:
@@ -666,12 +696,12 @@ def main():
         sys.exit(1)
 
     db = open_db(args.db)
-    base_url = get_foundry_base_url()
-    client = OpenAI(base_url=base_url, api_key="none")
+    client, model_name, provider_name = get_chat_client(args.groq_key)
+    print(f"💡 Sağlayıcı: {provider_name} | Model: {model_name}")
 
     result = ask_kap(
         args.question, db, client,
-        chat_model_name=args.chat_model,
+        chat_model_name=model_name,
         company_filter=args.company,
         type_filter=args.type,
         top_k=args.top_k,
