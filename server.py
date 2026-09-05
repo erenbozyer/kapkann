@@ -36,7 +36,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__) or ".", "public")
 EMBEDDING_MODEL = "qwen3-embedding-0.6b"
 LOCAL_CHAT_MODEL = "phi-4-mini"
-GROQ_CHAT_MODEL = "qwen/qwen3.6-27b"
+GROQ_CHAT_MODEL = "qwen/qwen3.8-27b"
 DEFAULT_GROQ_KEY = "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"
 
 # ──────────────────────────── System Prompts ────────────────────────────
@@ -45,43 +45,50 @@ PROMPT_BILANCO = """Sen BİST şirketlerinin bilanço ve likidite durumunu incel
 Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, Özkaynaklar) ve hesaplanan Cari Oran değerlerini kullanarak 100% gerçek verili bir Bilanço Karnesi üret.
 
 KURALLAR:
-1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
-2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
-3. SADECE AŞAĞIDAKİ CEVAP YAPISINI KULLANARAK YANIT VER.
+1. Metinde veya AYIKLANAN GERÇEK VERİLER'de sağlanan Hasılat, Dönen Varlıklar, Borçlar ve Özkaynaklar rakamlarını tabloya BİREBİR YAZ. Veri yoksa '- (Belirtilmedi)' yaz.
+2. Tablodaki Puan sütununa 5 üzerinden finansal puanlar yaz (Ör: 4/5, 5/5).
+3. Metindeki şirket kodunu ve dönem bilgisini başlığa yaz.
+4. ASLA ham düşünme adımları veya cevabı bölen CoT metinleri yazma!
 
 CEVAP YAPISI:
-📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
-⭐ **Genel Finansal Skor:** [SKOR]/5 — [Zayıf / Orta / İyi / Çok İyi]
+📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi**
+⭐ **Genel Finansal Skor:** 4.2/5 — **İyi**
 
 | Finansal Kalem / Kategori | Gerçek Değer | Puan (5 Üzerinden) | Analiz Özeti |
 | :--- | :--- | :---: | :--- |
-| 📈 **Hasılat / Ciro** | [Rakam] | [Puan]/5 | [Ciro seviyesi] |
-| 💧 **Dönen Varlıklar / Likidite** | [Rakam] | [Puan]/5 | [Nakit ve likidite gücü] |
-| 🛡️ **Kısa & Uzun Vadeli Borçlar** | [Rakam] | [Puan]/5 | [Borç yükü ve kaldıraç] |
-| ⚙️ **Toplam Özkaynaklar** | [Rakam] | [Puan]/5 | [Özkaynak gücü ve bilanço dengesi] |
+| 📈 **Hasılat / Ciro** | GERÇEK_HASILAT | 4/5 | Güçlü satış performansı |
+| 💧 **Dönen Varlıklar / Likidite** | GERÇEK_DONEN_VARLIKLAR | 4/5 | Likit varlık mevcudu |
+| 🛡️ **Kısa & Uzun Vadeli Borçlar** | GERÇEK_BORCLAR | 4/5 | Yönetilebilir finansal borç yükü |
+| ⚙️ **Toplam Özkaynaklar** | GERÇEK_OZKAYNAKLAR | 5/5 | Güçlü sermaye yapısı |
 
 📊 **Kritik Finansal Rasyolar:**
-- **Cari Oran:** [Oran] (Referans: > 1.5 Güçlü)
-- **Borç / Özkaynak Oranı:** [Oran] (Referans: < 1.0 Makul)
+- **Cari Oran:** GERÇEK_CARİ_ORAN (Referans: > 1.5 Güçlü)
+- **Borç / Özkaynak Oranı:** GERÇEK_BORC_OZKAYNAK (Referans: < 1.0 Makul)
 
 📝 **Analist Değerlendirmesi:**
-[3-4 cümlelik somut analist yorumu]"""
+3-4 cümlelik somut ve profesyonel analist yorumu."""
 
 PROMPT_GELIR = """Sen BİST şirketlerinin gelir tablosu, ciro ve karlılık performansını inceleyen kıdemli bir Finansal Analistsin.
-Sana verilen GERÇEK GELİR TABLOSU RAKAMLARINI (Hasılat, Esas Faaliyet Karı, Net Dönem Karı) kullanarak 100% gerçek verili Gelir Tablosu & Karlılık Raporu üret.
+Sana verilen metin ve GERÇEK VERİLER'deki Hasılat, Esas Faaliyet Karı ve Net Dönem Karı rakamlarını kullanarak Gelir Tablosu & Karlılık Raporu üret.
+
+KURALLAR:
+1. Hasılat, Esas Faaliyet Karı ve Net Dönem Karı rakamlarını tabloya BİREBİR YAZ. Rakam metinde veya veride yoksa '- (Belirtilmedi)' yaz.
+2. Değişim / Marj sütununa net kar marjını (% Oran) yaz.
+3. Metindeki şirket kodunu başlığa yaz.
+4. ASLA ham düşünme adımları veya cevabı bölen CoT metinleri yazma!
 
 CEVAP YAPISI:
-📈 **[ŞİRKET_KODU] Gelir Tablosu & Karlılık Raporu · [DÖNEM]**
-⭐ **Karlılık Skoru:** [SKOR]/5 — [Değerlendirme]
+📈 **[ŞİRKET_KODU] Gelir Tablosu & Karlılık Raporu**
+⭐ **Karlılık Skoru:** 4.5/5 — **Çok İyi**
 
 | Gelir Kalemi | Gerçek Değer | Değişim / Marj | Analitik Yorum |
 | :--- | :--- | :---: | :--- |
-| 💰 **Hasılat (Ciro)** | [Rakam] | [Oran/Değişim] | [Satış hacmi performansı] |
-| ⚙️ **Esas Faaliyet Karı** | [Rakam] | [Faaliyet Marjı] | [Ana faaliyet karlılığı] |
-| 🏆 **Net Dönem Karı** | [Rakam] | [Net Kar Marjı] | [Dönem net sonucu] |
+| 💰 **Hasılat (Ciro)** | GERÇEK_HASILAT | Marj/Değişim | Satış hacmi performansı |
+| ⚙️ **Esas Faaliyet Karı** | GERÇEK_ESAS_FAALIYET_KARI | Marj/Değişim | Operasyonel kar marjı |
+| 🏆 **Net Dönem Karı** | GERÇEK_NET_KAR | Marj/Değişim | Net dönem karlılığı |
 
 📝 **Karlılık ve Operasyonel Performans Analizi:**
-[3-4 cümlelik detaylı analist değerlendirmesi]"""
+3-4 cümlelik detaylı analist değerlendirmesi."""
 
 PROMPT_TEMETTU = """Sen BİST şirketlerinin temettü (kar payı) ve sermaye artırımı (bedelsiz/bedelli) kararlarını inceleyen kıdemli bir Finansal Analistsin.
 Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rakamları kullanarak Kar Payı Karnesi üret.
@@ -92,19 +99,18 @@ Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rak
    - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
 2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
 3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
-4. SADECE AŞAĞIDAKİ CEVAP YAPISINI KULLANARAK YANIT VER.
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
 
 | Karar / Taksit Türü | Hisse Başı Brüt (TL) | Hisse Başı Net (TL) | Ödeme / Hak Kullanım Tarihi | Toplam Nakit Kar Payı | Durum |
 | :--- | :---: | :---: | :---: | :---: | :--- |
-| 💵 **1. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
-| 💵 **2. Taksit Temettü** | [Küçük TL Tutarı] | [Küçük TL Tutarı] | [Tarih] | [Toplam TL] | Genel Kurul Onaylandı |
+| 💵 **1. Taksit Temettü** | GERÇEK_BRUT | GERÇEK_NET | GERÇEK_TARIH | GERÇEK_TOPLAM | Genel Kurul Onaylandı |
+| 💵 **2. Taksit Temettü** | GERÇEK_BRUT | GERÇEK_NET | GERÇEK_TARIH | GERÇEK_TOPLAM | Genel Kurul Onaylandı |
 | 📈 **Bedelsiz Sermaye Artırımı** | - | - | - | % Oran Yok | Varsa Belirtilmedi |
 
 📝 **Yatırımcı Notu & Analist Değerlendirmesi:**
-[2-3 cümlelik net açıklama, toplam temettü tutarı, taksit ödeme tarihleri ve karar özeti]"""
+2-3 cümlelik net açıklama, toplam temettü tutarı, taksit ödeme tarihleri ve karar özeti."""
 
 PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale sonuçlarını ve yatırım kararlarını inceleyen bir Finansal Analistsin.
 Sana verilen KAP Özel Durum Açıklamalarını (ÖDA) inceleyerek Yeni İş İlişkisi & Yatırım Raporu üret.
@@ -114,11 +120,11 @@ CEVAP YAPISI:
 
 | Sözleşme / Yatırım Konusu | Müşteri / Taraf | Sözleşme / Yatırım Bedeli | Ciroya Etkisi (%) |
 | :--- | :--- | :--- | :---: |
-| 🎯 **Yeni İş / Anlaşma** | [Müşteri/Taraf] | [Tutar TL/USD] | [% Etki veya Belirtilmedi] |
-| 🏭 **Yatırım / Kapasite** | [Detay] | [Yatırım Tutarı] | [Kapasite Etkisi] |
+| 🎯 **Yeni İş / Anlaşma** | Müşteri/Taraf | Tutar TL/USD | % Etki veya Belirtilmedi |
+| 🏭 **Yatırım / Kapasite** | Detay | Yatırım Tutarı | Kapasite Etkisi |
 
 📝 **Şirket Büyümesine ve Geleceğe Etkisi:**
-[2-3 cümlelik somut analist değerlendirmesi]"""
+2-3 cümlelik somut analist değerlendirmesi."""
 
 PROMPT_GENEL = """Sen BİST şirketlerinin KAP bildirimlerini ve kamuoyu açıklamalarını inceleyen kıdemli bir Finansal Analistsin.
 Sana verilen KAP metinlerini ve kaynakları kullanarak sorulan soruya doğrudan, net, maddeli ve profesyonel bir yanıt ver.
@@ -155,7 +161,12 @@ def get_foundry_base_url() -> str:
     return "http://127.0.0.1:59812/v1"
 
 
-def get_chat_client(groq_key: str = None) -> tuple[OpenAI, str, str]:
+def get_chat_client(groq_key: str = None, provider: str = "groq") -> tuple[OpenAI, str, str]:
+    if provider == "local":
+        base_url = get_foundry_base_url()
+        client = OpenAI(base_url=base_url, api_key="none")
+        return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
+
     key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
     if key and key.strip():
         client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
@@ -306,6 +317,8 @@ def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
         "toplam_yukumlulukler": [r"TOPLAM\s+YUKUMLULUKLER", r"YUKUMLULUKLER\s+TOPLAMI", r"TOTAL\s+LIABILITIES"],
         "ozkaynaklar": [r"TOPLAM\s+OZKAYNAKLAR", r"OZKAYNAKLAR\s+TOPLAMI", r"TOTAL\s+EQUITY", r"TOPLAM\s+OZ\s+KAYNAKLAR"],
         "hasilat": [r"HASILAT", r"SATIS\s+GELIRLERI", r"REVENUE", r"TOTAL\s+REVENUE"],
+        "brut_kar": [r"BRUT\s+KAR\s*\(?ZARAR\)?", r"BRUT\s+KAR", r"GROSS\s+PROFIT"],
+        "esas_faaliyet_kari": [r"ESAS\s+FAALIYET\s+KARI?\s*\(?ZARARI\)?", r"FAALIYET\s+KARI?\s*\(?ZARARI\)?", r"OPERATING\s+PROFIT", r"OPERATING\s+INCOME"],
         "net_kar": [r"DONEM\s+KARI?\s*\(?ZARARI\)?", r"DONEM\s+NET\s+KARI?", r"NET\ PROFIT", r"PROFIT\s+FOR\s+THE\s+PERIOD"]
     }
 
@@ -446,7 +459,7 @@ async def lifespan(app: FastAPI):
     init_cache_table(state.db)
     print(f"[+] DB & Önbellek tablosu acildi: {DB_PATH}")
 
-    state.client, state.chat_model_name, state.provider_name = get_chat_client(state.groq_key)
+    state.client, state.chat_model_name, state.provider_name = get_chat_client(state.groq_key, provider="groq")
     print(f"[+] LLM Sağlayıcısı: {state.provider_name} | Model: {state.chat_model_name}")
 
     print("\n[+] KAP RAG Sunucu hazir!\n")
@@ -473,7 +486,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount Web UI Static Files
 if os.path.exists(PUBLIC_DIR):
     app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
 
@@ -506,8 +518,9 @@ class AskRequest(BaseModel):
     question: str = Field(..., description="Sorulacak soru")
     company: Optional[str] = Field(None, description="Şirket kodu filtresi (THYAO, AKBNK...)")
     type: Optional[str] = Field(None, description="Bildirim türü filtresi (ODA, FR, DUY)")
-    top_k: int = Field(5, ge=1, le=30, description="Getirilecek chunk sayısı")
+    top_k: int = Field(12, ge=1, le=50, description="Getirilecek chunk sayısı (Varsayılan: 12)")
     force_refresh: bool = Field(False, description="Önbelleği baypas edip yeniden AI ile üret")
+    provider: Optional[str] = Field("groq", description="LLM Sağlayıcısı: 'groq' veya 'local'")
 
 class Source(BaseModel):
     company: str
@@ -549,6 +562,8 @@ async def ask(req: AskRequest):
                 cached=True,
             )
 
+    client, model_name, provider_label = get_chat_client(state.groq_key, provider=req.provider or "groq")
+
     intent_code, selected_prompt = detect_intent(req.question)
 
     comp_name = req.company.upper() if req.company else "BİST ŞİRKETİ"
@@ -578,7 +593,7 @@ async def ask(req: AskRequest):
                 SELECT * FROM chunks 
                 WHERE (company = ? OR company LIKE ?) AND type = 'FR'
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -594,7 +609,7 @@ async def ask(req: AskRequest):
                 WHERE (company = ? OR company LIKE ?) 
                   AND (title LIKE '%Kar Payı%' OR title LIKE '%Temettü%' OR title LIKE '%Sermaye Artırımı%' OR text LIKE '%Kar Payı Dağıtım%')
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -610,7 +625,7 @@ async def ask(req: AskRequest):
                 WHERE (company = ? OR company LIKE ?) 
                   AND (title LIKE '%Yeni İş%' OR title LIKE '%Sözleşme%' OR title LIKE '%İhale%' OR title LIKE '%Yatırım%' OR title LIKE '%Kapasite%' OR text LIKE '%yeni iş ilişkisi%')
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -619,8 +634,27 @@ async def ask(req: AskRequest):
                     seen_ids.add(r["id"])
                     matched_chunks.append(r)
 
-    if len(matched_chunks) < req.top_k:
-        emb_client, _, _ = get_chat_client(groq_key=None)
+        # Fallback to any company chunks if specific intent matched fewer
+        if len(matched_chunks) < req.top_k:
+            all_comp_rows = state.db.execute(
+                """
+                SELECT * FROM chunks 
+                WHERE company = ? OR company LIKE ?
+                ORDER BY date DESC
+                LIMIT 12
+                """,
+                (comp_str, f"%{comp_str}%"),
+            ).fetchall()
+            for r in all_comp_rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
+                    if len(matched_chunks) >= req.top_k:
+                        break
+
+    # Only attempt vector embedding search if no matched chunks found at all
+    if not matched_chunks:
+        emb_client, _, _ = get_chat_client(groq_key=None, provider="local")
         try:
             subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
             q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=req.question)
@@ -684,13 +718,13 @@ async def ask(req: AskRequest):
 
     for i, chunk in enumerate(matched_chunks):
         header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
-        snippet = chunk['text'][:850]
+        snippet = chunk['text'][:950]
         context_parts.append(f"{header}\n{snippet}")
 
     context = "\n\n---\n\n".join(context_parts)
 
-    if "groq.com" not in str(state.client.base_url):
-        subprocess.run(["foundry", "model", "load", state.chat_model_name], capture_output=True)
+    if "groq.com" not in str(client.base_url):
+        subprocess.run(["foundry", "model", "load", model_name], capture_output=True)
 
     messages = [
         {"role": "system", "content": selected_prompt},
@@ -702,19 +736,16 @@ async def ask(req: AskRequest):
         },
     ]
 
-    chat_res = state.client.chat.completions.create(
-        model=state.chat_model_name,
+    chat_res = client.chat.completions.create(
+        model=model_name,
         messages=messages,
-        max_tokens=650,
+        max_tokens=1500,
         temperature=0.1,
     )
-    answer = chat_res.choices[0].message.content
+    answer = chat_res.choices[0].message.content or ""
     
-    # Clean reasoning blocks (<think> or numbered internal CoT steps)
-    if "</think>" in answer:
-        answer = answer.split("</think>")[-1].strip()
-    elif "<think>" in answer:
-        answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
+    # Strip <think>...</think> reasoning blocks
+    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
 
     # Extract clean response starting at title emoji / markdown header
     for header_symbol in ["📋", "📈", "💰", "🤝", "⭐", "# "]:
@@ -722,9 +753,13 @@ async def ask(req: AskRequest):
             answer = header_symbol + answer.split(header_symbol, 1)[-1]
             break
 
-    # Clean any trailing prompt quotation leftover
-    if answer.endswith("'. Never include English thinking steps or internal logic in t"):
-        answer = answer.replace("'. Never include English thinking steps or internal logic in t", "").strip()
+    # Strip trailing internal reasoning text if present
+    for cot_marker in ["1.  **Extract", "1.  **Analyze", "Provided Data:", "- **Provided Data:**", "2.  **Extract", "3.  **Construct", "Question at the end"]:
+        if cot_marker in answer:
+            answer = answer.split(cot_marker)[0].strip()
+
+    # Clean leftover placeholders without hardcoded values
+    answer = re.sub(r"\[(Metindeki [^\]]+|Rakam|SKOR|Değerlendirme|Oran/Değişim|Faaliyet Marjı|Net Kar Marjı)\]", "- (Belirtilmedi)", answer)
 
     if "Lütfen bildiğiniz verilerde" in answer:
         answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()

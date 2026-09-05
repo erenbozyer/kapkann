@@ -1,6 +1,6 @@
 /**
  * KAPKANN — BİST KAP RAG & Finansal Analiz Web UI Logic
- * Dynamic DB Stats & Fact-Engine RAG Pipeline
+ * Dynamic DB Stats & Fact-Engine RAG Pipeline (ONLINE Groq / LOCAL Foundry Toggle)
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -24,8 +24,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const chunkCountText = document.getElementById('chunkCountText');
   const companyCountText = document.getElementById('companyCountText');
 
+  const btnOnline = document.getElementById('btnOnline');
+  const btnLocal = document.getElementById('btnLocal');
+
   // Application State
   let currentCompany = '';
+  let currentProvider = 'groq'; // Default to Groq ONLINE
   let activeSessionId = generateSessionId();
   let chatSessions = loadChatSessions();
 
@@ -42,8 +46,9 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/api/health');
       if (res.ok) {
+        const h = await res.json();
         serverStatus.classList.add('online');
-        serverStatus.querySelector('.status-text').textContent = 'KAP Engine Hazır (Online)';
+        serverStatus.querySelector('.status-text').textContent = `KAP Engine Hazır (${h.provider || 'Online'})`;
       } else {
         throw new Error();
       }
@@ -85,9 +90,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function setProvider(prov) {
+    currentProvider = prov;
+    document.querySelectorAll('.provider-switch-btn').forEach(btn => {
+      const btnProv = btn.dataset.provider || (btn.classList.contains('online') ? 'groq' : 'local');
+      if (btnProv === prov) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  }
+
   /* ──────────────────────────── Event Listeners ──────────────────────────── */
 
   function setupEventListeners() {
+    // Provider Toggle Switch (ONLINE / LOCAL) - Header & Sidebar Sync
+    document.querySelectorAll('.provider-switch-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const prov = btn.dataset.provider || (btn.classList.contains('online') ? 'groq' : 'local');
+        setProvider(prov);
+      });
+    });
+
     // Mobile Sidebar Toggle
     openSidebarBtn?.addEventListener('click', () => sidebar.classList.add('active'));
     closeSidebarBtn?.addEventListener('click', () => sidebar.classList.remove('active'));
@@ -232,16 +257,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let wrapper = targetWrapper;
     let typingElem = null;
 
+    const providerText = currentProvider === 'groq' ? 'Groq Llama-3.3 / Qwen-27B (Online)' : 'Local Foundry Phi-4 (Offline)';
+
     if (!wrapper) {
-      typingElem = appendTypingIndicator();
+      typingElem = appendTypingIndicator(providerText);
     } else {
-      // Show loading in existing wrapper
       wrapper.querySelector('.message-bubble').innerHTML = `
         <div class="typing-indicator">
           <div class="typing-dot"></div>
           <div class="typing-dot"></div>
           <div class="typing-dot"></div>
-          <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.5rem;">Yapay zeka yanıtı canlı oluşturuyor...</span>
+          <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.5rem;">${providerText} yanıt üretiyor...</span>
         </div>
       `;
     }
@@ -251,8 +277,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const payload = {
         question: questionText,
         company: currentCompany || null,
-        top_k: 5,
-        force_refresh: forceRefresh
+        top_k: 12,
+        force_refresh: forceRefresh,
+        provider: currentProvider
       };
 
       const res = await fetch('/api/ask', {
@@ -322,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Cache Tag
     const cacheTagHtml = data.cached
       ? `<div class="cache-badge-tag"><i class="fa-solid fa-bolt"></i> Önbellekten Getirildi (${(data.query_time_ms / 1000).toFixed(2)}s)</div>`
-      : `<div class="cache-badge-tag" style="background:rgba(99,102,241,0.15); color:var(--primary); border-color:var(--primary-glow);"><i class="fa-solid fa-robot"></i> Canlı AI Yanıtı</div>`;
+      : `<div class="cache-badge-tag" style="background:rgba(99,102,241,0.15); color:var(--primary); border-color:var(--primary-glow);"><i class="fa-solid fa-robot"></i> Canlı AI Yanıtı (${currentProvider.toUpperCase()})</div>`;
 
     // Sources List
     let sourcesHtml = '';
@@ -398,7 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return wrapper;
   }
 
-  function appendTypingIndicator() {
+  function appendTypingIndicator(providerText = '') {
     const wrapper = document.createElement('div');
     wrapper.className = 'message-wrapper assistant';
     wrapper.innerHTML = `
@@ -411,6 +438,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
             <div class="typing-dot"></div>
+            <span style="font-size:0.8rem; color:var(--text-muted); margin-left:0.5rem;">${providerText} analiz yapıyor...</span>
           </div>
         </div>
       </div>

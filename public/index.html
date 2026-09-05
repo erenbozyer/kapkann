@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KAPKANN — BİST KAP RAG Finansal Analiz & Bilanço Asistanı</title>
-  <meta name="description" content="BİST şirketlerinin KAP bildirimleri ve bilanço raporlarını yerel LLM ve RAG mimarisi ile 5 spesifik modda analiz eden akıllı finansal asistan.">
+  <meta name="description" content="BİST şirketlerinin KAP bildirimleri ve bilanço raporlarını Groq API ve yerel LLM RAG mimarisi ile 5 spesifik modda analiz eden akıllı finansal asistan.">
   
   <!-- Google Fonts & FontAwesome -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -15,7 +15,8 @@
   <!-- Marked.js for Markdown Rendering -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
-  <link rel="stylesheet" href="/style.css">
+  <!-- Cache-busting CSS -->
+  <link rel="stylesheet" href="/style.css?v=2.6">
 </head>
 <body>
 
@@ -30,7 +31,7 @@
           </div>
           <div>
             <div class="brand-title">KAPKANN</div>
-            <div class="brand-subtitle" id="sidebarDbStats">BİST Finansal RAG v2.2</div>
+            <div class="brand-subtitle" id="sidebarDbStats">BİST Finansal RAG v2.5</div>
           </div>
         </div>
         <button class="mobile-close-btn" id="closeSidebarBtn">
@@ -43,6 +44,21 @@
         <button class="btn-new-chat" id="newChatBtn">
           <i class="fa-solid fa-plus"></i> Yeni Analiz Sohbeti
         </button>
+      </div>
+
+      <!-- AI Provider Switch (Sidebar) -->
+      <div class="sidebar-section">
+        <div class="section-label">
+          <i class="fa-solid fa-bolt"></i> AI Model Sağlayıcısı
+        </div>
+        <div class="provider-toggle-box">
+          <button class="provider-switch-btn active online" data-provider="groq" id="btnOnlineSidebar">
+            <i class="fa-solid fa-cloud"></i> ONLINE (Groq 27B)
+          </button>
+          <button class="provider-switch-btn local" data-provider="local" id="btnLocalSidebar">
+            <i class="fa-solid fa-microchip"></i> LOCAL (Phi-4)
+          </button>
+        </div>
       </div>
 
       <!-- Company Selector Dropdown -->
@@ -97,9 +113,18 @@
         </div>
 
         <div class="header-actions">
+          <!-- ONLINE / LOCAL Provider Toggle Switch Header -->
+          <div class="provider-toggle-box">
+            <button class="provider-switch-btn active online" data-provider="groq" id="btnOnline">
+              <i class="fa-solid fa-cloud"></i> ONLINE (Groq 27B)
+            </button>
+            <button class="provider-switch-btn local" data-provider="local" id="btnLocal">
+              <i class="fa-solid fa-microchip"></i> LOCAL (Phi-4)
+            </button>
+          </div>
+
           <span class="badge-tag" id="headerChunksBadge"><i class="fa-solid fa-database"></i> <span id="chunkCountText">...</span> KAP Chunk</span>
           <span class="badge-tag" id="headerCompanyBadge"><i class="fa-solid fa-building"></i> <span id="companyCountText">...</span> Şirket</span>
-          <span class="badge-tag"><i class="fa-solid fa-microchip"></i> Local Foundry LLM</span>
         </div>
       </header>
 
@@ -143,10 +168,10 @@
             </div>
           </div>
 
-          <!-- Pre-cached Demo Sample Questions for Promo Video -->
+          <!-- Canlı Canlı AI Analiz Demo Soruları -->
           <div style="width: 100%; margin-top: 1.5rem; text-align: left;">
             <div class="section-label" style="font-size: 0.85rem; color: var(--accent-cyan); margin-bottom: 0.75rem;">
-              <i class="fa-solid fa-star"></i> Örnek Demo Soruları (Anında Yanıt)
+              <i class="fa-solid fa-bolt"></i> Canlı AI Sorgu Kartları
             </div>
             <div class="demo-questions-grid">
               <div class="demo-question-card" data-company="THYAO" data-q="THYAO bilanço ve borçluluk durumu nasıl?">
@@ -209,7 +234,7 @@
         </div>
 
         <div class="footer-info">
-          KAPKANN v2.2 · BİST KAP RAG & Bilanço Asistanı · Yanıtları beğendiyseniz "Evet", beğenmediyseniz "Yeniden Üret" butonuna basabilirsiniz.
+          KAPKANN v2.5 · Groq LPU & Local Foundry Destekli BİST KAP RAG Engine
         </div>
       </footer>
 
@@ -217,6 +242,7 @@
 
   </div>
 
-  <script src="/app.js"></script>
+  <!-- Cache-busting JS -->
+  <script src="/app.js?v=2.6"></script>
 </body>
 </html>

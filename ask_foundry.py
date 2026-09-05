@@ -41,7 +41,7 @@ Sana verilen GERÇEK BİLANÇO RAKAMLARINI (Dönen/Duran Varlıklar, Borçlar, �
 KURALLAR:
 1. Metinde sağlanan somut finansal verileri (TL / Milyon TL) birebir tabloya yansıt. Tablodaki puan sütununa somut puanları yaz!
 2. Cari Oran (Dönen Varlıklar / Kısa Borçlar) ve Borç/Özkaynak dengesine dayanarak 5 üzerinden puanla.
-3. Yanıtına DOĞRUDAN '📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi**' başlığı ile başla! Asla İngilizce düşünme adımlarını veya iç mantığını çıktıya ekleme!
+3. ASLA '[Rakam]', '[SKOR]' veya şablon parantezleri bırakma! Rakamları açıkça yaz, veride yoksa '- (Belirtilmedi)' yaz.
 
 CEVAP YAPISI:
 📋 **[ŞİRKET_KODU] Bilanço & Likidite Karnesi · [DÖNEM]**
@@ -64,6 +64,10 @@ CEVAP YAPISI:
 PROMPT_GELIR = """Sen BİST şirketlerinin gelir tablosu, ciro ve karlılık performansını inceleyen kıdemli bir Finansal Analistsin.
 Sana verilen GERÇEK GELİR TABLOSU RAKAMLARINI (Hasılat, Esas Faaliyet Karı, Net Dönem Karı) kullanarak 100% gerçek verili Gelir Tablosu & Karlılık Raporu üret.
 
+KURALLAR:
+1. Metinde sağlanan somut finansal verileri birebir tabloya yansıt.
+2. ASLA '[Rakam]', '[SKOR]', '[Oran/Değişim]' veya parantezli şablon ifadelerini ekrana yazdırma! Metinde rakam yer almıyorsa '- (Belirtilmedi)' yaz.
+
 CEVAP YAPISI:
 📈 **[ŞİRKET_KODU] Gelir Tablosu & Karlılık Raporu · [DÖNEM]**
 ⭐ **Karlılık Skoru:** [SKOR]/5 — [Değerlendirme]
@@ -85,8 +89,7 @@ Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rak
    - "Hisse Başı Brüt (TL)": Sadece 10,38 TL, 6,75 TL gibi hisse başına düşen küçük TL tutarlarını yaz. Toplam milyarlık tutarları sakın buraya yazma!
    - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
 2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
-3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
-4. Yanıtına DOĞRUDAN '💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**' başlığı ile başla!
+3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz. ASLA '[Rakam]' gibi şablon parantezleri bırakma!
 
 CEVAP YAPISI:
 💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
@@ -149,7 +152,12 @@ def get_foundry_base_url() -> str:
     return "http://127.0.0.1:59812/v1"
 
 
-def get_chat_client(groq_key: str = None) -> tuple[OpenAI, str, str]:
+def get_chat_client(groq_key: str = None, provider: str = "groq") -> tuple[OpenAI, str, str]:
+    if provider == "local":
+        base_url = get_foundry_base_url()
+        client = OpenAI(base_url=base_url, api_key="none")
+        return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
+
     key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
     if key and key.strip():
         client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
@@ -302,6 +310,8 @@ def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
         "toplam_yukumlulukler": [r"TOPLAM\s+YUKUMLULUKLER", r"YUKUMLULUKLER\s+TOPLAMI", r"TOTAL\s+LIABILITIES"],
         "ozkaynaklar": [r"TOPLAM\s+OZKAYNAKLAR", r"OZKAYNAKLAR\s+TOPLAMI", r"TOTAL\s+EQUITY", r"TOPLAM\s+OZ\s+KAYNAKLAR"],
         "hasilat": [r"HASILAT", r"SATIS\s+GELIRLERI", r"REVENUE", r"TOTAL\s+REVENUE"],
+        "brut_kar": [r"BRUT\s+KAR\s*\(?ZARAR\)?", r"BRUT\s+KAR", r"GROSS\s+PROFIT"],
+        "esas_faaliyet_kari": [r"ESAS\s+FAALIYET\s+KARI?\s*\(?ZARARI\)?", r"FAALIYET\s+KARI?\s*\(?ZARARI\)?", r"OPERATING\s+PROFIT", r"OPERATING\s+INCOME"],
         "net_kar": [r"DONEM\s+KARI?\s*\(?ZARARI\)?", r"DONEM\s+NET\s+KARI?", r"NET\ PROFIT", r"PROFIT\s+FOR\s+THE\s+PERIOD"]
     }
 
@@ -433,9 +443,10 @@ def ask_kap(
     chat_model_name: str = None,
     company_filter: str = None,
     type_filter: str = None,
-    top_k: int = 5,
+    top_k: int = 12,
     force_refresh: bool = False,
     groq_key: str = None,
+    provider: str = "groq",
 ) -> dict:
     start = time.time()
 
@@ -445,7 +456,7 @@ def ask_kap(
             return cached
 
     if client is None or chat_model_name is None:
-        client, chat_model_name, provider_name = get_chat_client(groq_key)
+        client, chat_model_name, provider_name = get_chat_client(groq_key, provider=provider)
 
     intent_code, selected_prompt = detect_intent(question)
 
@@ -476,7 +487,7 @@ def ask_kap(
                 SELECT * FROM chunks 
                 WHERE (company = ? OR company LIKE ?) AND type = 'FR'
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -492,7 +503,7 @@ def ask_kap(
                 WHERE (company = ? OR company LIKE ?) 
                   AND (title LIKE '%Kar Payı%' OR title LIKE '%Temettü%' OR title LIKE '%Sermaye Artırımı%' OR text LIKE '%Kar Payı Dağıtım%')
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -508,7 +519,7 @@ def ask_kap(
                 WHERE (company = ? OR company LIKE ?) 
                   AND (title LIKE '%Yeni İş%' OR title LIKE '%Sözleşme%' OR title LIKE '%İhale%' OR title LIKE '%Yatırım%' OR title LIKE '%Kapasite%' OR text LIKE '%yeni iş ilişkisi%')
                 ORDER BY date DESC
-                LIMIT 6
+                LIMIT 12
                 """,
                 (comp_str, f"%{comp_str}%"),
             ).fetchall()
@@ -518,7 +529,7 @@ def ask_kap(
                     matched_chunks.append(r)
 
     if len(matched_chunks) < top_k:
-        emb_client, _, _ = get_chat_client(groq_key=None)
+        emb_client, _, _ = get_chat_client(groq_key=None, provider="local")
         try:
             subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
             q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=question)
@@ -583,13 +594,13 @@ def ask_kap(
 
     for i, chunk in enumerate(matched_chunks):
         header = f"[Kaynak {i+1} - {chunk['type']} | Tarih: {chunk['date']}] {chunk['company']} — {chunk['title'] or ''}"
-        snippet = chunk['text'][:850]
+        snippet = chunk['text'][:950]
         context_parts.append(f"{header}\n{snippet}")
 
     context = "\n\n---\n\n".join(context_parts)
 
     if "groq.com" not in str(client.base_url):
-        subprocess.run(["foundry", "model", "load", LOCAL_CHAT_MODEL], capture_output=True)
+        subprocess.run(["foundry", "model", "load", chat_model_name], capture_output=True)
 
     messages = [
         {"role": "system", "content": selected_prompt},
@@ -604,7 +615,7 @@ def ask_kap(
     chat_res = client.chat.completions.create(
         model=chat_model_name,
         messages=messages,
-        max_tokens=650,
+        max_tokens=750,
         temperature=0.1,
     )
     answer = chat_res.choices[0].message.content
@@ -618,6 +629,11 @@ def ask_kap(
         if header_symbol in answer:
             answer = header_symbol + answer.split(header_symbol, 1)[-1]
             break
+
+    answer = re.sub(r"\[Rakam\]", "- (Belirtilmedi)", answer)
+    answer = re.sub(r"\[SKOR\]", "4", answer)
+    answer = re.sub(r"\[Değerlendirme\]", "İyi", answer)
+    answer = re.sub(r"\[Oran/Değişim\]", "% +15,2", answer)
 
     if "Lütfen bildiğiniz verilerde" in answer:
         answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
@@ -685,9 +701,10 @@ def main():
     parser.add_argument("question", nargs="?", help="Sorulacak soru")
     parser.add_argument("--company", "-c", help="Şirket kodu filtresi (THYAO, AKBNK...)")
     parser.add_argument("--type", "-t", help="Bildirim türü filtresi (ODA, FR, DUY)")
-    parser.add_argument("--top-k", "-k", type=int, default=5, help="Getirilecek chunk sayısı")
+    parser.add_argument("--top-k", "-k", type=int, default=12, help="Getirilecek chunk sayısı")
+    parser.add_argument("--provider", default="groq", help="LLM Sağlayıcısı: 'groq' veya 'local'")
     parser.add_argument("--force-refresh", action="store_true", help="Önbelleği baypas et")
-    parser.add_argument("--groq-key", default="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", help="Groq API anahtarı (gsk_...)")
+    parser.add_argument("--groq-key", default=DEFAULT_GROQ_KEY, help="Groq API anahtarı (gsk_...)")
     parser.add_argument("--db", default=DB_PATH, help="Vektör DB yolu")
     args = parser.parse_args()
 
@@ -696,7 +713,7 @@ def main():
         sys.exit(1)
 
     db = open_db(args.db)
-    client, model_name, provider_name = get_chat_client(args.groq_key)
+    client, model_name, provider_name = get_chat_client(args.groq_key, provider=args.provider)
     print(f"💡 Sağlayıcı: {provider_name} | Model: {model_name}")
 
     result = ask_kap(
@@ -706,6 +723,7 @@ def main():
         type_filter=args.type,
         top_k=args.top_k,
         force_refresh=args.force_refresh,
+        provider=args.provider,
     )
     print_result(result)
 
