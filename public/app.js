@@ -105,6 +105,34 @@ document.addEventListener('DOMContentLoaded', () => {
   /* ──────────────────────────── Event Listeners ──────────────────────────── */
 
   function setupEventListeners() {
+    // View Navigation Buttons (Header & Sidebar Tabs)
+    document.querySelectorAll('[data-view]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const viewName = btn.getAttribute('data-view');
+        setActiveView(viewName);
+        if (window.innerWidth <= 768) sidebar.classList.remove('active');
+      });
+    });
+
+    // BİST 100 Search & Filter Listeners
+    const bistSearchInput = document.getElementById('bistSearchInput');
+    const btnRefreshBist100 = document.getElementById('btnRefreshBist100');
+
+    bistSearchInput?.addEventListener('input', renderBist100Table);
+
+    document.querySelectorAll('.bist-filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.bist-filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentBistFilter = btn.getAttribute('data-filter') || 'all';
+        renderBist100Table();
+      });
+    });
+
+    btnRefreshBist100?.addEventListener('click', () => {
+      fetchBist100Data();
+    });
+
     // Provider Toggle Switch (ONLINE / LOCAL) - Header & Sidebar Sync
     document.querySelectorAll('.provider-switch-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -537,6 +565,159 @@ document.addEventListener('DOMContentLoaded', () => {
     renderHistoryList();
     scrollToBottom();
     if (window.innerWidth <= 768) sidebar.classList.remove('active');
+  }
+
+  /* ──────────────────────────── BİST 100 Canlı Borsa Logic ──────────────────────────── */
+
+  let bist100Data = [];
+  let currentBistFilter = 'all'; // 'all', 'up', 'down'
+  let bistAutoRefreshTimer = null;
+
+  function setActiveView(viewName) {
+    const viewChat = document.getElementById('viewChat');
+    const viewBist100 = document.getElementById('viewBist100');
+    const headerMainTitle = document.getElementById('headerMainTitle');
+
+    document.querySelectorAll('[data-view]').forEach(btn => {
+      if (btn.getAttribute('data-view') === viewName) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    if (viewName === 'bist100') {
+      if (viewChat) viewChat.style.display = 'none';
+      if (viewBist100) viewBist100.style.display = 'flex';
+      if (headerMainTitle) headerMainTitle.textContent = 'BİST 100 Canlı Borsa';
+      fetchBist100Data();
+      startBistAutoRefresh();
+    } else {
+      if (viewBist100) viewBist100.style.display = 'none';
+      if (viewChat) viewChat.style.display = 'flex';
+      if (headerMainTitle) headerMainTitle.textContent = 'KAP Finansal RAG Asistanı';
+      stopBistAutoRefresh();
+    }
+  }
+
+  async function fetchBist100Data() {
+    const tableBody = document.getElementById('bist100TableBody');
+    const btnRefresh = document.getElementById('btnRefreshBist100');
+
+    if (btnRefresh) {
+      const icon = btnRefresh.querySelector('i');
+      if (icon) icon.classList.add('fa-spin');
+    }
+
+    try {
+      const res = await fetch('/api/bist100');
+      if (!res.ok) throw new Error('BİST 100 verisi çekilemedi');
+      const data = await res.json();
+
+      bist100Data = data.items || [];
+      renderBist100Stats(data.stats, data.updated_at);
+      renderBist100Table();
+    } catch (err) {
+      if (tableBody && bist100Data.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; color:var(--accent-rose);">⚠️ BİST 100 verisi alınamadı. Lütfen sunucu bağlantısını kontrol edin.</td></tr>`;
+      }
+    } finally {
+      if (btnRefresh) {
+        const icon = btnRefresh.querySelector('i');
+        if (icon) icon.classList.remove('fa-spin');
+      }
+    }
+  }
+
+  function renderBist100Stats(stats = {}, updatedAt = '') {
+    const totalElem = document.getElementById('bistTotalCount');
+    const upElem = document.getElementById('bistUpCount');
+    const downElem = document.getElementById('bistDownCount');
+    const neutralElem = document.getElementById('bistNeutralCount');
+    const updatedElem = document.getElementById('bistUpdatedAt');
+
+    if (totalElem) totalElem.textContent = stats.total || bist100Data.length || '100';
+    if (upElem) upElem.textContent = stats.up || '0';
+    if (downElem) downElem.textContent = stats.down || '0';
+    if (neutralElem) neutralElem.textContent = stats.neutral || '0';
+    if (updatedElem) updatedElem.textContent = updatedAt || new Date().toLocaleTimeString('tr-TR');
+  }
+
+  function renderBist100Table() {
+    const tableBody = document.getElementById('bist100TableBody');
+    const searchInput = document.getElementById('bistSearchInput');
+    if (!tableBody) return;
+
+    const searchTerm = searchInput ? searchInput.value.trim().toUpperCase() : '';
+
+    const filtered = bist100Data.filter(item => {
+      // Filter by direction
+      if (currentBistFilter === 'up' && item.direction !== 'up') return false;
+      if (currentBistFilter === 'down' && item.direction !== 'down') return false;
+
+      // Filter by search term
+      if (searchTerm && !item.code.includes(searchTerm)) return false;
+
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      tableBody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; color:var(--text-muted);">Aramanıza uygun hisse bulunamadı.</td></tr>`;
+      return;
+    }
+
+    tableBody.innerHTML = filtered.map(item => {
+      const isUp = item.direction === 'up';
+      const isDown = item.direction === 'down';
+      const badgeClass = isUp ? 'up' : (isDown ? 'down' : 'neutral');
+      const icon = isUp ? '<i class="fa-solid fa-caret-up"></i>' : (isDown ? '<i class="fa-solid fa-caret-down"></i>' : '');
+
+      return `
+        <tr>
+          <td><span class="bist-code-badge">${item.code}</span></td>
+          <td><strong>${item.last_price} TL</strong></td>
+          <td><span class="pct-badge ${badgeClass}">${icon} ${item.change_pct}</span></td>
+          <td style="color:var(--text-muted);">${item.bid}</td>
+          <td style="color:var(--text-muted);">${item.ask}</td>
+          <td style="font-size:0.8rem; color:var(--accent-rose);">${item.low}</td>
+          <td style="font-size:0.8rem; color:var(--accent-emerald);">${item.high}</td>
+          <td style="font-size:0.8rem; color:var(--text-muted);">${item.aof}</td>
+          <td style="font-size:0.8rem; color:var(--text-main);">${item.volume_tl} TL</td>
+          <td style="text-align:center;">
+            <button class="btn-ai-analyze" data-code="${item.code}">
+              <i class="fa-solid fa-robot"></i> AI Analiz
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    // Bind AI Analyze buttons
+    tableBody.querySelectorAll('.btn-ai-analyze').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const code = btn.getAttribute('data-code');
+        if (code) {
+          setCompany(code);
+          if (companySelect) companySelect.value = code;
+          setActiveView('chat');
+          submitQuestion(`${code} bilanço karnesi ve borçluluk durumu nasıl?`);
+        }
+      });
+    });
+  }
+
+  function startBistAutoRefresh() {
+    stopBistAutoRefresh();
+    bistAutoRefreshTimer = setInterval(() => {
+      fetchBist100Data();
+    }, 60000); // 1 minute auto-refresh
+  }
+
+  function stopBistAutoRefresh() {
+    if (bistAutoRefreshTimer) {
+      clearInterval(bistAutoRefreshTimer);
+      bistAutoRefreshTimer = null;
+    }
   }
 
   /* ──────────────────────────── Utilities ──────────────────────────── */

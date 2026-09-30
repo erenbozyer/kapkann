@@ -853,6 +853,114 @@ async def health():
     }
 
 
+# ──────────────────────────── BİST 100 Live Scraper & Cache ────────────────────────────
+
+BIST100_CACHE_DATA = {"items": [], "stats": {}, "updated_at": None, "timestamp": 0}
+
+def fetch_midas_bist100() -> dict:
+    global BIST100_CACHE_DATA
+    now = time.time()
+
+    # 60 saniyelik önbellek
+    if BIST100_CACHE_DATA["items"] and (now - BIST100_CACHE_DATA["timestamp"] < 60):
+        return BIST100_CACHE_DATA
+
+    try:
+        import urllib.request
+        from bs4 import BeautifulSoup
+
+        url = "https://www.getmidas.com/canli-borsa/xu100-bist-100-hisseleri"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        )
+        html_bytes = urllib.request.urlopen(req, timeout=10).read()
+        html = html_bytes.decode("utf-8", errors="ignore")
+
+        soup = BeautifulSoup(html, "html.parser")
+        table = soup.find("table", class_="stock-table")
+
+        items = []
+        up_count = 0
+        down_count = 0
+        neutral_count = 0
+
+        if table:
+            rows = table.find_all("tr")
+            for r in rows[1:]:
+                cols = [c.get_text(strip=True) for c in r.find_all(["th", "td"])]
+                if len(cols) >= 10:
+                    code = cols[0].upper()
+                    last_price = cols[1]
+                    bid = cols[2]
+                    ask = cols[3]
+                    change_pct = cols[4]
+                    low = cols[5]
+                    high = cols[6]
+                    aof = cols[7]
+                    vol_tl = cols[8]
+                    vol_lot = cols[9]
+
+                    # Direction
+                    if change_pct.startswith("-"):
+                        direction = "down"
+                        down_count += 1
+                    elif change_pct.startswith("+") or (change_pct != "0,00%" and not change_pct.startswith("0") and change_pct != "-"):
+                        direction = "up"
+                        up_count += 1
+                    else:
+                        direction = "neutral"
+                        neutral_count += 1
+
+                    items.append({
+                        "code": code,
+                        "last_price": last_price,
+                        "bid": bid,
+                        "ask": ask,
+                        "change_pct": change_pct,
+                        "low": low,
+                        "high": high,
+                        "aof": aof,
+                        "volume_tl": vol_tl,
+                        "volume_lot": vol_lot,
+                        "direction": direction
+                    })
+
+        updated_str = time.strftime("%H:%M:%S (%d.%m.%Y)")
+        stats = {
+            "total": len(items),
+            "up": up_count,
+            "down": down_count,
+            "neutral": neutral_count
+        }
+
+        if items:
+            BIST100_CACHE_DATA = {
+                "items": items,
+                "stats": stats,
+                "updated_at": updated_str,
+                "timestamp": now
+            }
+        return BIST100_CACHE_DATA
+
+    except Exception as e:
+        print(f"[-] BİST 100 verisi çekilemedi: {e}")
+        if BIST100_CACHE_DATA["items"]:
+            return BIST100_CACHE_DATA
+        return {
+            "items": [],
+            "stats": {"total": 0, "up": 0, "down": 0, "neutral": 0},
+            "updated_at": "Hata",
+            "timestamp": now
+        }
+
+
+@app.get("/api/bist100")
+async def get_bist100():
+    return fetch_midas_bist100()
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (Groq API & Local Foundry)")
     parser.add_argument("--host", default="0.0.0.0", help="Sunucu adresi")

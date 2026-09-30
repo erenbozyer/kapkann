@@ -39,26 +39,26 @@
         </button>
       </div>
 
+      <!-- Navigation Section (Sidebar) -->
+      <div class="sidebar-section">
+        <div class="section-label">
+          <i class="fa-solid fa-compass"></i> Sayfa Navigasyonu
+        </div>
+        <div class="nav-tab-box">
+          <button class="nav-tab-btn active" data-view="chat" id="navBtnChat">
+            <i class="fa-solid fa-robot"></i> KAP AI Asistanı
+          </button>
+          <button class="nav-tab-btn" data-view="bist100" id="navBtnBist100">
+            <i class="fa-solid fa-chart-line"></i> BİST 100 Canlı
+          </button>
+        </div>
+      </div>
+
       <!-- New Chat Button -->
       <div class="sidebar-section">
         <button class="btn-new-chat" id="newChatBtn">
           <i class="fa-solid fa-plus"></i> Yeni Analiz Sohbeti
         </button>
-      </div>
-
-      <!-- AI Provider Switch (Sidebar) -->
-      <div class="sidebar-section">
-        <div class="section-label">
-          <i class="fa-solid fa-bolt"></i> AI Model Sağlayıcısı
-        </div>
-        <div class="provider-toggle-box">
-          <button class="provider-switch-btn active online" data-provider="groq" id="btnOnlineSidebar">
-            <i class="fa-solid fa-cloud"></i> ONLINE (Groq 27B)
-          </button>
-          <button class="provider-switch-btn local" data-provider="local" id="btnLocalSidebar">
-            <i class="fa-solid fa-microchip"></i> LOCAL (Phi-4)
-          </button>
-        </div>
       </div>
 
       <!-- Company Selector Dropdown -->
@@ -94,17 +94,17 @@
       </div>
     </aside>
 
-    <!-- ──────────────────────────── Main Chat View ──────────────────────────── -->
+    <!-- ──────────────────────────── Main Content Area ──────────────────────────── -->
     <main class="main-content">
       
       <!-- Header -->
       <header class="chat-header">
-        <div style="display: flex; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
           <button class="mobile-menu-btn" id="openSidebarBtn">
             <i class="fa-solid fa-bars"></i>
           </button>
           <div class="header-title">
-            <h2>KAP Finansal RAG Asistanı</h2>
+            <h2 id="headerMainTitle">KAP Finansal RAG Asistanı</h2>
             <div class="company-badge" id="activeCompanyBadge">
               <i class="fa-solid fa-filter"></i>
               <span class="company-badge-name">Tüm Şirketler</span>
@@ -128,121 +128,216 @@
         </div>
       </header>
 
-      <!-- Chat Body Scrollable Area -->
-      <div class="chat-body" id="chatBody">
-        
-        <!-- Welcome Screen (Visible on empty state) -->
-        <div class="welcome-container" id="welcomeContainer">
-          <div class="welcome-logo">
-            <i class="fa-solid fa-brain"></i>
+      <!-- ──────────────────────── VIEW 1: CHAT ASİSTANI ──────────────────────── -->
+      <div class="app-view active" id="viewChat">
+        <!-- Chat Body Scrollable Area -->
+        <div class="chat-body" id="chatBody">
+          
+          <!-- Welcome Screen (Visible on empty state) -->
+          <div class="welcome-container" id="welcomeContainer">
+            <div class="welcome-logo">
+              <i class="fa-solid fa-brain"></i>
+            </div>
+            <div class="welcome-title">
+              <h1>BİST KAP RAG & Bilanço Asistanı</h1>
+              <p>Gerçek KAP verileri, bilanço dipnotları ve likidite oranlarıyla 5 spesifik modda akıllı analiz yapın.</p>
+            </div>
+
+            <!-- Quick Template Cards -->
+            <div class="quick-cards">
+              <div class="quick-card" data-prompt="bilanço karnesi ve borçluluk durumu nasıl?">
+                <div class="quick-card-icon">📊</div>
+                <div class="quick-card-title">Bilanço Karnesi</div>
+                <div class="quick-card-desc">Cari oran, borç/özkaynak ve 5 üzerinden finansal skor</div>
+              </div>
+
+              <div class="quick-card" data-prompt="temettü dağıtacak mı, kar payı kararı var mı?">
+                <div class="quick-card-icon">💰</div>
+                <div class="quick-card-title">Temettü & Kar Payı</div>
+                <div class="quick-card-desc">1. ve 2. taksit temettü tutarları ve ödeme tarihleri</div>
+              </div>
+
+              <div class="quick-card" data-prompt="ciro ve net dönem karı ne kadar?">
+                <div class="quick-card-icon">📈</div>
+                <div class="quick-card-title">Gelir & Karlılık</div>
+                <div class="quick-card-desc">Hasılat, esas faaliyet karı ve net kar marjı</div>
+              </div>
+
+              <div class="quick-card" data-prompt="yeni iş ilişkisi veya yatırım duyurdu mu?">
+                <div class="quick-card-icon">🤝</div>
+                <div class="quick-card-title">Yeni İş & Yatırım</div>
+                <div class="quick-card-desc">Sözleşmeler, ihaleler ve kapasite yatırımları</div>
+              </div>
+            </div>
+
+            <!-- Canlı Canlı AI Analiz Demo Soruları -->
+            <div style="width: 100%; margin-top: 1.5rem; text-align: left;">
+              <div class="section-label" style="font-size: 0.85rem; color: var(--accent-cyan); margin-bottom: 0.75rem;">
+                <i class="fa-solid fa-bolt"></i> Canlı AI Sorgu Kartları
+              </div>
+              <div class="demo-questions-grid">
+                <div class="demo-question-card" data-company="THYAO" data-q="THYAO bilanço ve borçluluk durumu nasıl?">
+                  <i class="fa-solid fa-circle-play"></i> ✈️ THYAO Bilanço Karnesi & Likidite
+                </div>
+                <div class="demo-question-card" data-company="TUPRS" data-q="TUPRS temettü dağıtacak mı, kar payı kararı var mı?">
+                  <i class="fa-solid fa-circle-play"></i> ⛽ TUPRS Temettü & Kar Payı Kararı
+                </div>
+                <div class="demo-question-card" data-company="AEFES" data-q="AEFES bilanço karnesi ve likidite oranları">
+                  <i class="fa-solid fa-circle-play"></i> 🍺 AEFES Bilanço & Cari Oran
+                </div>
+                <div class="demo-question-card" data-company="EREGL" data-q="EREGL bedelsiz sermaye artırımı ve temettü kararı var mı?">
+                  <i class="fa-solid fa-circle-play"></i> 🏗️ EREGL Temettü & Bedelsiz
+                </div>
+                <div class="demo-question-card" data-company="SISE" data-q="SISE ciro ve net dönem karı ne kadar?">
+                  <i class="fa-solid fa-circle-play"></i> 🏢 SISE Gelir Tablosu & Ciro
+                </div>
+                <div class="demo-question-card" data-company="BIMAS" data-q="BIMAS satış gelirleri ve net karı ne kadar?">
+                  <i class="fa-solid fa-circle-play"></i> 🛒 BIMAS Satış & Karlılık
+                </div>
+                <div class="demo-question-card" data-company="AKBNK" data-q="AKBNK son KAP bildirimlerinde öne çıkanlar nelerdir?">
+                  <i class="fa-solid fa-circle-play"></i> 🏦 AKBNK KAP Bildirim Özeti
+                </div>
+              </div>
+            </div>
+
           </div>
-          <div class="welcome-title">
-            <h1>BİST KAP RAG & Bilanço Asistanı</h1>
-            <p>Gerçek KAP verileri, bilanço dipnotları ve likidite oranlarıyla 5 spesifik modda akıllı analiz yapın.</p>
-          </div>
 
-          <!-- Quick Template Cards -->
-          <div class="quick-cards">
-            <div class="quick-card" data-prompt="bilanço karnesi ve borçluluk durumu nasıl?">
-              <div class="quick-card-icon">📊</div>
-              <div class="quick-card-title">Bilanço Karnesi</div>
-              <div class="quick-card-desc">Cari oran, borç/özkaynak ve 5 üzerinden finansal skor</div>
-            </div>
-
-            <div class="quick-card" data-prompt="temettü dağıtacak mı, kar payı kararı var mı?">
-              <div class="quick-card-icon">💰</div>
-              <div class="quick-card-title">Temettü & Kar Payı</div>
-              <div class="quick-card-desc">1. ve 2. taksit temettü tutarları ve ödeme tarihleri</div>
-            </div>
-
-            <div class="quick-card" data-prompt="ciro ve net dönem karı ne kadar?">
-              <div class="quick-card-icon">📈</div>
-              <div class="quick-card-title">Gelir & Karlılık</div>
-              <div class="quick-card-desc">Hasılat, esas faaliyet karı ve net kar marjı</div>
-            </div>
-
-            <div class="quick-card" data-prompt="yeni iş ilişkisi veya yatırım duyurdu mu?">
-              <div class="quick-card-icon">🤝</div>
-              <div class="quick-card-title">Yeni İş & Yatırım</div>
-              <div class="quick-card-desc">Sözleşmeler, ihaleler ve kapasite yatırımları</div>
-            </div>
-          </div>
-
-          <!-- Canlı Canlı AI Analiz Demo Soruları -->
-          <div style="width: 100%; margin-top: 1.5rem; text-align: left;">
-            <div class="section-label" style="font-size: 0.85rem; color: var(--accent-cyan); margin-bottom: 0.75rem;">
-              <i class="fa-solid fa-bolt"></i> Canlı AI Sorgu Kartları
-            </div>
-            <div class="demo-questions-grid">
-              <div class="demo-question-card" data-company="THYAO" data-q="THYAO bilanço ve borçluluk durumu nasıl?">
-                <i class="fa-solid fa-circle-play"></i> ✈️ THYAO Bilanço Karnesi & Likidite
-              </div>
-              <div class="demo-question-card" data-company="TUPRS" data-q="TUPRS temettü dağıtacak mı, kar payı kararı var mı?">
-                <i class="fa-solid fa-circle-play"></i> ⛽ TUPRS Temettü & Kar Payı Kararı
-              </div>
-              <div class="demo-question-card" data-company="AEFES" data-q="AEFES bilanço karnesi ve likidite oranları">
-                <i class="fa-solid fa-circle-play"></i> 🍺 AEFES Bilanço & Cari Oran
-              </div>
-              <div class="demo-question-card" data-company="EREGL" data-q="EREGL bedelsiz sermaye artırımı ve temettü kararı var mı?">
-                <i class="fa-solid fa-circle-play"></i> 🏗️ EREGL Temettü & Bedelsiz
-              </div>
-              <div class="demo-question-card" data-company="SISE" data-q="SISE ciro ve net dönem karı ne kadar?">
-                <i class="fa-solid fa-circle-play"></i> 🏢 SISE Gelir Tablosu & Ciro
-              </div>
-              <div class="demo-question-card" data-company="BIMAS" data-q="BIMAS satış gelirleri ve net karı ne kadar?">
-                <i class="fa-solid fa-circle-play"></i> 🛒 BIMAS Satış & Karlılık
-              </div>
-              <div class="demo-question-card" data-company="AKBNK" data-q="AKBNK son KAP bildirimlerinde öne çıkanlar nelerdir?">
-                <i class="fa-solid fa-circle-play"></i> 🏦 AKBNK KAP Bildirim Özeti
-              </div>
-            </div>
-          </div>
+          <!-- Dynamic Messages Container -->
+          <div id="messagesList" style="display: flex; flex-direction: column; gap: 1.5rem; width: 100%;"></div>
 
         </div>
 
-        <!-- Dynamic Messages Container -->
-        <div id="messagesList" style="display: flex; flex-direction: column; gap: 1.5rem; width: 100%;"></div>
+        <!-- Input Footer -->
+        <footer class="chat-input-footer">
+          
+          <!-- Template Chips -->
+          <div class="template-chips">
+            <div class="template-chip" data-template="bilanco">📊 Bilanço Karnesi</div>
+            <div class="template-chip" data-template="gelir">📈 Gelir Tablosu</div>
+            <div class="template-chip" data-template="temettu">💰 Temettü Kararı</div>
+            <div class="template-chip" data-template="yatirim">🤝 Yeni İş & Anlaşma</div>
+            <div class="template-chip" data-template="genel">📰 Genel KAP Özeti</div>
+          </div>
 
+          <div class="input-box-wrapper">
+            <div class="active-input-tag" id="inputActiveTag" style="display: none;">
+              <span id="inputTagText">THYAO</span>
+              <i class="fa-solid fa-xmark" id="removeInputTag"></i>
+            </div>
+            <textarea 
+              class="chat-textarea" 
+              id="chatInput" 
+              placeholder="Bir BİST şirketi sorun (ör. THYAO bilanço karnesi nasıl, TUPRS temettü dağıtacak mı?)..."
+              rows="1"
+            ></textarea>
+            <button class="btn-send" id="sendBtn" disabled>
+              <i class="fa-solid fa-paper-plane"></i>
+            </button>
+          </div>
+
+          <div class="footer-info">
+            KAPKANN v2.6 · Groq LPU & Local Foundry Destekli BİST KAP RAG Engine
+          </div>
+        </footer>
       </div>
 
-      <!-- Input Footer -->
-      <footer class="chat-input-footer">
-        
-        <!-- Template Chips -->
-        <div class="template-chips">
-          <div class="template-chip" data-template="bilanco">📊 Bilanço Karnesi</div>
-          <div class="template-chip" data-template="gelir">📈 Gelir Tablosu</div>
-          <div class="template-chip" data-template="temettu">💰 Temettü Kararı</div>
-          <div class="template-chip" data-template="yatirim">🤝 Yeni İş & Anlaşma</div>
-          <div class="template-chip" data-template="genel">📰 Genel KAP Özeti</div>
-        </div>
+      <!-- ──────────────────────── VIEW 2: BİST 100 CANLI BORSA ──────────────────────── -->
+      <div class="app-view" id="viewBist100" style="display: none;">
+        <div class="bist100-container">
+          
+          <!-- Piyasa İstatistik Kartları -->
+          <div class="bist100-stats-row">
+            <div class="bist100-stat-card">
+              <div class="stat-icon"><i class="fa-solid fa-list-ol"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">Toplam Hisse</span>
+                <span class="stat-value" id="bistTotalCount">100</span>
+              </div>
+            </div>
+            
+            <div class="bist100-stat-card up">
+              <div class="stat-icon"><i class="fa-solid fa-arrow-trend-up"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">Yükselenler</span>
+                <span class="stat-value" id="bistUpCount">-</span>
+              </div>
+            </div>
 
-        <div class="input-box-wrapper">
-          <div class="active-input-tag" id="inputActiveTag" style="display: none;">
-            <span id="inputTagText">THYAO</span>
-            <i class="fa-solid fa-xmark" id="removeInputTag"></i>
+            <div class="bist100-stat-card down">
+              <div class="stat-icon"><i class="fa-solid fa-arrow-trend-down"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">Düşenler</span>
+                <span class="stat-value" id="bistDownCount">-</span>
+              </div>
+            </div>
+
+            <div class="bist100-stat-card neutral">
+              <div class="stat-icon"><i class="fa-solid fa-grip-lines"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">Değişmeyen</span>
+                <span class="stat-value" id="bistNeutralCount">-</span>
+              </div>
+            </div>
+
+            <div class="bist100-stat-card refresh-info">
+              <div class="stat-icon"><i class="fa-solid fa-clock-rotate-left"></i></div>
+              <div class="stat-info">
+                <span class="stat-label">Son Güncelleme</span>
+                <span class="stat-value" style="font-size:0.9rem;" id="bistUpdatedAt">Yükleniyor...</span>
+              </div>
+              <div class="refresh-badge">Dakikada 1 Güncellenir (getmidas.com)</div>
+            </div>
           </div>
-          <textarea 
-            class="chat-textarea" 
-            id="chatInput" 
-            placeholder="Bir BİST şirketi sorun (ör. THYAO bilanço karnesi nasıl, TUPRS temettü dağıtacak mı?)..."
-            rows="1"
-          ></textarea>
-          <button class="btn-send" id="sendBtn" disabled>
-            <i class="fa-solid fa-paper-plane"></i>
-          </button>
-        </div>
 
-        <div class="footer-info">
-          KAPKANN v2.5 · Groq LPU & Local Foundry Destekli BİST KAP RAG Engine
+          <!-- Arama & Filtreleme Toolbar -->
+          <div class="bist100-toolbar">
+            <div class="bist100-search-box">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="bistSearchInput" placeholder="BİST 100 hisse kodu ara (ör. THYAO, AKBNK, TUPRS)..." />
+            </div>
+
+            <div class="bist100-filter-group">
+              <button class="bist-filter-btn active" data-filter="all">Tümü</button>
+              <button class="bist-filter-btn up" data-filter="up"><i class="fa-solid fa-caret-up"></i> Yükselenler</button>
+              <button class="bist-filter-btn down" data-filter="down"><i class="fa-solid fa-caret-down"></i> Düşenler</button>
+            </div>
+
+            <button class="btn-refresh-bist" id="btnRefreshBist100" title="Verileri Şimdi Yenile">
+              <i class="fa-solid fa-arrows-rotate"></i> Yenile
+            </button>
+          </div>
+
+          <!-- Canlı BİST 100 Tablosu -->
+          <div class="bist100-table-wrapper">
+            <table class="bist100-table">
+              <thead>
+                <tr>
+                  <th>Hisse Kodu</th>
+                  <th>Son Fiyat (TL)</th>
+                  <th>Günlük Fark</th>
+                  <th>Alış</th>
+                  <th>Satış</th>
+                  <th>En Düşük</th>
+                  <th>En Yüksek</th>
+                  <th>AÖF</th>
+                  <th>Hacim (TL)</th>
+                  <th style="text-align:center;">AI Analiz</th>
+                </tr>
+              </thead>
+              <tbody id="bist100TableBody">
+                <!-- Dynamically populated via JS -->
+              </tbody>
+            </table>
+          </div>
+
         </div>
-      </footer>
+      </div>
 
     </main>
 
   </div>
 
   <!-- Cache-busting JS -->
-  <script src="/app.js?v=2.6"></script>
+  <script src="/app.js?v=2.7"></script>
 </body>
 </html>
