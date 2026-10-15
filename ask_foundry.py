@@ -18,7 +18,11 @@ import time
 
 import sqlite3
 import sqlite_vec
+from dotenv import load_dotenv
 from openai import OpenAI
+
+# Ortam değişkenlerini yükle (.env)
+load_dotenv()
 
 # Ensure UTF-8 output encoding for Windows terminal
 if hasattr(sys.stdout, "reconfigure"):
@@ -27,11 +31,21 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # ──────────────────────────── Config ────────────────────────────
 
-DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
-EMBEDDING_MODEL = "qwen3-embedding-0.6b"
-LOCAL_CHAT_MODEL = "phi-4-mini"
-GROQ_CHAT_MODEL = "qwen/qwen3.6-27b"
-DEFAULT_GROQ_KEY = "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"
+def resolve_db_path() -> str:
+    env_path = os.environ.get("DB_PATH") or os.environ.get("DATABASE_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    local_path = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
+    if os.path.exists(local_path):
+        return local_path
+    desktop_path = r"C:\Users\user\Desktop\kapkann\kap_vectors.db"
+    if os.path.exists(desktop_path):
+        return desktop_path
+    return local_path
+
+DB_PATH = resolve_db_path()
+GROQ_CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # ──────────────────────────── System Prompts ────────────────────────────
 
@@ -130,43 +144,13 @@ CEVAP YAPISI:
 - [Gelişme 2]"""
 
 
-def get_foundry_base_url() -> str:
-    try:
-        res = subprocess.run("foundry status -o json", shell=True, capture_output=True, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            data = json.loads(res.stdout)
-            urls = data.get("service", {}).get("webUrls", [])
-            if urls:
-                return urls[0].rstrip("/") + "/v1"
-    except Exception:
-        pass
-
-    try:
-        res = subprocess.run("foundry status", shell=True, capture_output=True, text=True)
-        m = re.search(r"http://127\.0\.0\.1:\d+", res.stdout)
-        if m:
-            return m.group(0) + "/v1"
-    except Exception:
-        pass
-
-    return "http://127.0.0.1:59812/v1"
-
-
 def get_chat_client(groq_key: str = None, provider: str = "groq") -> tuple[OpenAI, str, str]:
-    if provider == "local":
-        base_url = get_foundry_base_url()
-        client = OpenAI(base_url=base_url, api_key="none")
-        return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
-
-    key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
-    if key and key.strip():
-        client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
-        model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
-        return client, model_name, f"Groq Cloud ({model_name})"
-
-    base_url = get_foundry_base_url()
-    client = OpenAI(base_url=base_url, api_key="none")
-    return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
+    key = (groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY).strip()
+    model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
+    if not key:
+        print("[!] UYARI: GROQ_API_KEY bulunamadı. Lütfen .env dosyasına ekleyin.")
+    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key or "missing_key")
+    return client, model_name, f"Groq Cloud ({model_name})"
 
 
 def serialize_f32(vec: list[float]) -> bytes:
@@ -529,51 +513,28 @@ def ask_kap(
                     matched_chunks.append(r)
 
     if len(matched_chunks) < top_k:
-        emb_client, _, _ = get_chat_client(groq_key=None, provider="local")
-        try:
-            subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
-            q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=question)
-            subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
+        keywords = [w for w in re.findall(r"\b[A-Za-z0-9ÇĞİÖŞÜçğıöşü]{3,}\b", question) if len(w) > 2]
+        if keywords:
+            clauses = " OR ".join(["(title LIKE ? OR summary LIKE ? OR text LIKE ?)" for _ in keywords[:4]])
+            params = []
+            for kw in keywords[:4]:
+                term = f"%{kw}%"
+                params.extend([term, term, term])
 
-            q_embedding = q_res.data[0].embedding
-            q_blob = serialize_f32(q_embedding)
+            sql = f"SELECT * FROM chunks WHERE ({clauses})"
+            if company_filter:
+                sql += " AND (company = ? OR company LIKE ?)"
+                params.extend([company_filter.upper(), f"%{company_filter.upper()}%"])
+            if type_filter:
+                sql += " AND type = ?"
+                params.append(type_filter.upper())
 
-            fetch_count = top_k * 15 if (company_filter or type_filter) else top_k * 5
-            vec_rows = db.execute(
-                """
-                SELECT v.id, v.distance
-                FROM vec_chunks v
-                WHERE v.embedding MATCH ?
-                ORDER BY v.distance
-                LIMIT ?
-                """,
-                (q_blob, fetch_count),
-            ).fetchall()
-
-            if vec_rows:
-                candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
-                if candidate_ids:
-                    placeholders = ",".join(["?" for _ in candidate_ids])
-                    sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
-                    params = list(candidate_ids)
-
-                    if company_filter:
-                        sql += " AND (company = ? OR company LIKE ?)"
-                        params.extend([company_filter.upper(), f"%{company_filter.upper()}%"])
-                    if type_filter:
-                        sql += " AND type = ?"
-                        params.append(type_filter.upper())
-
-                    sql += " ORDER BY date DESC"
-                    vec_matched = db.execute(sql, params).fetchall()
-                    for r in vec_matched:
-                        if r["id"] not in seen_ids:
-                            seen_ids.add(r["id"])
-                            matched_chunks.append(r)
-                            if len(matched_chunks) >= top_k:
-                                break
-        except Exception as e:
-            print(f"[-] Vektör arama uyarısı: {e}")
+            sql += f" ORDER BY date DESC LIMIT {top_k}"
+            text_rows = db.execute(sql, params).fetchall()
+            for r in text_rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
 
     matched_chunks = matched_chunks[:top_k]
 

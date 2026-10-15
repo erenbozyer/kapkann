@@ -285,7 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let wrapper = targetWrapper;
     let typingElem = null;
 
-    const providerText = currentProvider === 'groq' ? 'Groq Llama-3.3 / Qwen-27B (Online)' : 'Local Foundry Phi-4 (Offline)';
+    const providerText = 'Groq Cloud AI (Llama 3.3)';
 
     if (!wrapper) {
       typingElem = appendTypingIndicator(providerText);
