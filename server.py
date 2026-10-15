@@ -1,8 +1,8 @@
 """
-server.py — KAP RAG FastAPI Backend (Groq API / Local Foundry + 5 Analiz Modu + Web UI)
+server.py — KAP RAG FastAPI Backend (Hafif, Bulut API / Groq Odaklı SaaS Motoru)
 
-Groq API (qwen/qwen3.6-27b) veya yerel Foundry (phi-4-mini)
-üzerinde çalışarak KAP bildirimlerinden %100 gerçek verilerle finansal raporlar üretir.
+KAP bildirimlerinden %100 gerçek verilerle finansal analiz ve rapor üretir.
+Yerel GPU bağımlılığı içermez; Groq Cloud API ile saniyenin altında yanıt verir.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import json
 import os
 import re
 import struct
-import subprocess
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -20,6 +19,7 @@ from typing import Optional
 
 import sqlite3
 import sqlite_vec
+from dotenv import load_dotenv
 from openai import OpenAI
 
 from fastapi import FastAPI, HTTPException
@@ -28,16 +28,38 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 import uvicorn
+# Ensure UTF-8 output encoding for Windows terminal
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
+# Ortam değişkenlerini yükle (.env)
+load_dotenv()
 
 # ──────────────────────────── Config ────────────────────────────
 
-DB_PATH = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
+# Veritabanı Yolu Belirleme (Önce Env, Sonra Proje Dizini, Sonra Desktop Fallback)
+def resolve_db_path() -> str:
+    env_path = os.environ.get("DB_PATH") or os.environ.get("DATABASE_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    
+    local_path = os.path.join(os.path.dirname(__file__) or ".", "kap_vectors.db")
+    if os.path.exists(local_path):
+        return local_path
+        
+    desktop_path = r"C:\Users\user\Desktop\kapkann\kap_vectors.db"
+    if os.path.exists(desktop_path):
+        return desktop_path
+        
+    return local_path
+
+DB_PATH = resolve_db_path()
 PUBLIC_DIR = os.path.join(os.path.dirname(__file__) or ".", "public")
-EMBEDDING_MODEL = "qwen3-embedding-0.6b"
-LOCAL_CHAT_MODEL = "phi-4-mini"
-GROQ_CHAT_MODEL = "qwen/qwen3.8-27b"
-DEFAULT_GROQ_KEY = "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"
+
+DEFAULT_GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 # ──────────────────────────── System Prompts ────────────────────────────
 
@@ -98,35 +120,50 @@ Sana verilen GERÇEK KAP Kar Payı Dağıtım Bildirimi metinlerini ve kesin rak
    - "Hisse Başı Brüt (TL)": Sadece 10,38 TL, 6,75 TL gibi hisse başına düşen küçük TL tutarlarını yaz. Toplam milyarlık tutarları sakın buraya yazma!
    - "Toplam Nakit Kar Payı": 20 Milyar TL, 13 Milyar TL veya 33 Milyar TL gibi toplam dağıtılan tutarları yaz.
 2. Tahvil, Bono, Kupon İtfası, Borçlanma Aracı bildirimlerini KESİNLİKLE Temettü / Kar Payı ile karıştırma!
-3. Metinde açıkça yazmayan veriler için "- (Belirtilmedi)" yaz.
+3. Şirketin temettü dağıtmama veya karı bünyede tutma kararı varsa tabloda net belirt.
+4. ASLA ham düşünme adımları veya cevabı bölen CoT metinleri yazma!
 
 CEVAP YAPISI:
-💰 **[ŞİRKET_KODU] Temettü & Sermaye Artırımı Karar Karnesi**
+💰 **[ŞİRKET_KODU] Kar Payı Dağıtım (Temettü) & Sermaye Karnesi**
+⭐ **Temettü Skoru:** [SKOR]/5 — [Zayıf / Orta / Cazip / Çok Cazip]
 
-| Karar / Taksit Türü | Hisse Başı Brüt (TL) | Hisse Başı Net (TL) | Ödeme / Hak Kullanım Tarihi | Toplam Nakit Kar Payı | Durum |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| 💵 **1. Taksit Temettü** | GERÇEK_BRUT | GERÇEK_NET | GERÇEK_TARIH | GERÇEK_TOPLAM | Genel Kurul Onaylandı |
-| 💵 **2. Taksit Temettü** | GERÇEK_BRUT | GERÇEK_NET | GERÇEK_TARIH | GERÇEK_TOPLAM | Genel Kurul Onaylandı |
-| 📈 **Bedelsiz Sermaye Artırımı** | - | - | - | % Oran Yok | Varsa Belirtilmedi |
+| Dağıtım / Taksit Dönemi | Hisse Başı Brüt (TL) | Hisse Başı Net (TL) | Toplam Nakit Kar Payı | Hak Kullanım (Ödeme) Tarihi |
+| :--- | :---: | :---: | :--- | :---: |
+| 📅 **1. Taksit** | [Brüt TL] | [Net TL] | [Toplam TL] | [Tarih] |
+| 📅 **2. Taksit** | [Brüt TL] | [Net TL] | [Toplam TL] | [Tarih] |
 
-📝 **Yatırımcı Notu & Analist Değerlendirmesi:**
-2-3 cümlelik net açıklama, toplam temettü tutarı, taksit ödeme tarihleri ve karar özeti."""
+📈 **Sermaye Artırımı & Bedelsiz Durumu:**
+- **Bedelsiz Sermaye Artırımı:** [% Oran veya 'Yok']
+- **Kayıtlı Sermaye Tavanı:** [Tutar]
 
-PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale sonuçlarını ve yatırım kararlarını inceleyen bir Finansal Analistsin.
-Sana verilen KAP Özel Durum Açıklamalarını (ÖDA) inceleyerek Yeni İş İlişkisi & Yatırım Raporu üret.
+📝 **Analist Görüşü & Temettü Değerlendirmesi:**
+3-4 cümlelik somut yatırımcı analizi."""
+
+PROMPT_YATIRIM = """Sen BİST şirketlerinin yeni iş ilişkilerini, ihale kazanımlarını ve fabrika/kapasite yatırımlarını inceleyen kıdemli bir Finansal Analistsin.
+Sana verilen GERÇEK KAP Bildirimi metinlerindeki sözleşme bedellerini, ihale detaylarını ve ciroya etkilerini kullanarak Yeni İş & Yatırım Analiz Raporu üret.
+
+KURALLAR:
+1. İhale/Sözleşme bedellerini (TL, USD, EUR) ve karşı tarafı net olarak yaz.
+2. Sözleşmenin şirketin cirosuna/faaliyetlerine tahmini katkısını belirt.
+3. Varsa yatırım tutarını ve hedeflenen kapasite artış oranını yaz.
+4. ASLA ham düşünme adımları veya cevabı bölen CoT metinleri yazma!
 
 CEVAP YAPISI:
 🤝 **[ŞİRKET_KODU] Yeni İş İlişkileri & Yatırım Raporu**
+⭐ **Büyüme Potansiyeli:** [SKOR]/5 — [Sınırlı / Olumlu / Çok Güçlü]
 
-| Sözleşme / Yatırım Konusu | Müşteri / Taraf | Sözleşme / Yatırım Bedeli | Ciroya Etkisi (%) |
-| :--- | :--- | :--- | :---: |
-| 🎯 **Yeni İş / Anlaşma** | Müşteri/Taraf | Tutar TL/USD | % Etki veya Belirtilmedi |
-| 🏭 **Yatırım / Kapasite** | Detay | Yatırım Tutarı | Kapasite Etkisi |
+| Tarih | İş / Yatırım Konusu | Karşı Taraf / Kurum | Tutar (TL / Döviz) | Ciroya Tahmini Katkı |
+| :---: | :--- | :--- | :--- | :---: |
+| [Tarih] | [İş Konusu] | [Müşteri / Kurum] | [Bedel] | [Yüksek / Orta / Pozitif] |
 
-📝 **Şirket Büyümesine ve Geleceğe Etkisi:**
-2-3 cümlelik somut analist değerlendirmesi."""
+🏭 **Yatırım & Kapasite Gelişmeleri:**
+- **Yatırım Türü / Lokasyon:** [Detay]
+- **Öngörülen Tamamlanma:** [Tarih / Çeyrek]
 
-PROMPT_GENEL = """Sen BİST şirketlerinin KAP bildirimlerini ve kamuoyu açıklamalarını inceleyen kıdemli bir Finansal Analistsin.
+📝 **Analist Yorumu:**
+3-4 cümlelik stratejik büyüme ve finansal etki değerlendirmesi."""
+
+PROMPT_GENEL = """Sen BİST şirketlerinin KAP (Kamu Aydınlatma Platformu) bildirimlerini takip eden kıdemli bir Piyasa Analistisin.
 Sana verilen KAP metinlerini ve kaynakları kullanarak sorulan soruya doğrudan, net, maddeli ve profesyonel bir yanıt ver.
 
 CEVAP YAPISI:
@@ -139,51 +176,24 @@ CEVAP YAPISI:
 - [Gelişme 2]"""
 
 
-def get_foundry_base_url() -> str:
-    try:
-        res = subprocess.run("foundry status -o json", shell=True, capture_output=True, text=True)
-        if res.returncode == 0 and res.stdout.strip():
-            data = json.loads(res.stdout)
-            urls = data.get("service", {}).get("webUrls", [])
-            if urls:
-                return urls[0].rstrip("/") + "/v1"
-    except Exception:
-        pass
+def get_chat_client(api_key: Optional[str] = None) -> tuple[OpenAI, str, str]:
+    """Groq Cloud API istemcisini hazırlar."""
+    key = (api_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY).strip()
+    model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
+    
+    if not key:
+        print("[!] UYARI: GROQ_API_KEY bulunamadı! İstekler başarısız olabilir.")
 
-    try:
-        res = subprocess.run("foundry status", shell=True, capture_output=True, text=True)
-        m = re.search(r"http://127\.0\.0\.1:\d+", res.stdout)
-        if m:
-            return m.group(0) + "/v1"
-    except Exception:
-        pass
-
-    return "http://127.0.0.1:59812/v1"
-
-
-def get_chat_client(groq_key: str = None, provider: str = "groq") -> tuple[OpenAI, str, str]:
-    if provider == "local":
-        base_url = get_foundry_base_url()
-        client = OpenAI(base_url=base_url, api_key="none")
-        return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
-
-    key = groq_key or os.environ.get("GROQ_API_KEY") or DEFAULT_GROQ_KEY
-    if key and key.strip():
-        client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key.strip())
-        model_name = os.environ.get("GROQ_MODEL", GROQ_CHAT_MODEL)
-        return client, model_name, f"Groq Cloud ({model_name})"
-
-    base_url = get_foundry_base_url()
-    client = OpenAI(base_url=base_url, api_key="none")
-    return client, LOCAL_CHAT_MODEL, "Local Foundry (phi-4-mini)"
+    client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=key or "missing_key")
+    return client, model_name, f"Groq Cloud ({model_name})"
 
 
 class AppState:
-    db: sqlite3.Connection = None
-    client: OpenAI = None
-    chat_model_name: str = LOCAL_CHAT_MODEL
-    provider_name: str = "Local Foundry"
-    groq_key: Optional[str] = DEFAULT_GROQ_KEY
+    db: Optional[sqlite3.Connection] = None
+    client: Optional[OpenAI] = None
+    chat_model_name: str = GROQ_CHAT_MODEL
+    provider_name: str = "Groq Cloud"
+    groq_key: str = DEFAULT_GROQ_KEY
 
 state = AppState()
 
@@ -282,6 +292,8 @@ def set_cached_answer(db: sqlite3.Connection, question: str, company: str, resul
     ))
     db.commit()
 
+
+# ──────────────────────────── Finansal Veri Ayıklama ────────────────────────────
 
 def extract_real_financial_facts(db: sqlite3.Connection, company: str) -> dict:
     comp_str = company.upper()
@@ -421,6 +433,24 @@ def extract_dividend_facts(db: sqlite3.Connection, company: str) -> str:
     return ""
 
 
+def detect_company_in_question(db: sqlite3.Connection, question: str) -> Optional[str]:
+    """Sorudan BİST şirket kodunu otomatik tespit eder."""
+    tokens = re.findall(r"\b[A-Za-zÇĞİÖŞÜçğıöşü]{3,6}\b", question)
+    candidates = [clean_str(t) for t in tokens]
+    if not candidates:
+        return None
+    
+    placeholders = ",".join(["?" for _ in candidates])
+    row = db.execute(
+        f"SELECT company FROM chunks WHERE company IN ({placeholders}) LIMIT 1",
+        candidates
+    ).fetchone()
+    
+    if row:
+        return row["company"]
+    return None
+
+
 def detect_intent(question: str) -> tuple[str, str]:
     q = question.lower()
 
@@ -443,12 +473,15 @@ def detect_intent(question: str) -> tuple[str, str]:
     return "GENEL", PROMPT_GENEL
 
 
+# ──────────────────────────── Lifecycle & FastAPI App ────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[+] DB ve LLM Client baslatiliyor...")
+    print(f"[+] Veritabanı bağlanıyor: {DB_PATH}")
 
     if not os.path.exists(DB_PATH):
-        print(f"[-] Veritabani bulunamadi: {DB_PATH}")
+        print(f"[-] HATA: Veritabanı bulunamadı: {DB_PATH}")
+        print("    Lütfen kap_vectors.db dosyasının proje dizininde olduğunu kontrol edin.")
         sys.exit(1)
 
     state.db = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -457,24 +490,24 @@ async def lifespan(app: FastAPI):
     state.db.enable_load_extension(False)
     state.db.row_factory = sqlite3.Row
     init_cache_table(state.db)
-    print(f"[+] DB & Önbellek tablosu acildi: {DB_PATH}")
+    print(f"[+] Veritabanı & Önbellek tablosu başarıyla yüklendi.")
 
-    state.client, state.chat_model_name, state.provider_name = get_chat_client(state.groq_key, provider="groq")
+    state.client, state.chat_model_name, state.provider_name = get_chat_client(state.groq_key)
     print(f"[+] LLM Sağlayıcısı: {state.provider_name} | Model: {state.chat_model_name}")
 
-    print("\n[+] KAP RAG Sunucu hazir!\n")
+    print("\n[+] KAPKANN RAG Sunucusu Hazir!\n")
 
     yield
 
-    print("\n[-] Kapatiliyor...")
+    print("\n[-] Kapatılıyor...")
     if state.db:
         state.db.close()
 
 
 app = FastAPI(
-    title="KAP RAG API",
-    description="Groq API (qwen/qwen3.6-27b) & Local Foundry Destekli BİST RAG Engine + Web UI",
-    version="2.3.0",
+    title="KAPKANN API",
+    description="Groq Cloud LPU Destekli BİST KAP RAG SaaS Motoru",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -495,7 +528,7 @@ async def read_index():
     index_path = os.path.join(PUBLIC_DIR, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "KAP RAG API running"}
+    return {"message": "KAPKANN API çalışıyor"}
 
 
 @app.get("/style.css")
@@ -503,7 +536,7 @@ async def read_css():
     css_path = os.path.join(PUBLIC_DIR, "style.css")
     if os.path.exists(css_path):
         return FileResponse(css_path, media_type="text/css")
-    raise HTTPException(404, "style.css not found")
+    raise HTTPException(404, "style.css bulunamadı")
 
 
 @app.get("/app.js")
@@ -511,16 +544,19 @@ async def read_js():
     js_path = os.path.join(PUBLIC_DIR, "app.js")
     if os.path.exists(js_path):
         return FileResponse(js_path, media_type="application/javascript")
-    raise HTTPException(404, "app.js not found")
+    raise HTTPException(404, "app.js bulunamadı")
 
+
+# ──────────────────────────── İstek / Yanıt Modelleri ────────────────────────────
 
 class AskRequest(BaseModel):
     question: str = Field(..., description="Sorulacak soru")
     company: Optional[str] = Field(None, description="Şirket kodu filtresi (THYAO, AKBNK...)")
-    type: Optional[str] = Field(None, description="Bildirim türü filtresi (ODA, FR, DUY)")
-    top_k: int = Field(12, ge=1, le=50, description="Getirilecek chunk sayısı (Varsayılan: 12)")
+    type: Optional[str] = Field(None, description="Bildirim türü filtresi (ODA, FR, DG)")
+    top_k: int = Field(12, ge=1, le=50, description="Getirilecek chunk sayısı")
     force_refresh: bool = Field(False, description="Önbelleği baypas edip yeniden AI ile üret")
-    provider: Optional[str] = Field("groq", description="LLM Sağlayıcısı: 'groq' veya 'local'")
+    provider: Optional[str] = Field("groq", description="LLM Sağlayıcısı (Varsayılan: groq)")
+
 
 class Source(BaseModel):
     company: str
@@ -533,6 +569,7 @@ class Source(BaseModel):
     attachment_filename: Optional[str]
     relevance_rank: int
 
+
 class AskResponse(BaseModel):
     answer: str
     sources: list[Source]
@@ -542,6 +579,8 @@ class AskResponse(BaseModel):
     cached: bool = False
 
 
+# ──────────────────────────── Soru / Sorgu Endpoint'i ────────────────────────────
+
 @app.post("/api/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
     start = time.time()
@@ -549,8 +588,16 @@ async def ask(req: AskRequest):
     if not req.question.strip():
         raise HTTPException(400, "Soru boş olamaz")
 
+    # Şirket kodu otomatik tespit (eğer seçilmemişse)
+    detected_company = req.company
+    if not detected_company:
+        detected_company = detect_company_in_question(state.db, req.question)
+
+    effective_company = detected_company.upper() if detected_company else None
+
+    # Önbellek kontrolü
     if not req.force_refresh:
-        cached_res = get_cached_answer(state.db, req.question, req.company)
+        cached_res = get_cached_answer(state.db, req.question, effective_company)
         if cached_res:
             sources_objs = [Source(**s) for s in cached_res["sources"]]
             return AskResponse(
@@ -562,30 +609,31 @@ async def ask(req: AskRequest):
                 cached=True,
             )
 
-    client, model_name, provider_label = get_chat_client(state.groq_key, provider=req.provider or "groq")
-
+    client, model_name, provider_label = get_chat_client(state.groq_key)
     intent_code, selected_prompt = detect_intent(req.question)
 
-    comp_name = req.company.upper() if req.company else "BİST ŞİRKETİ"
-    selected_prompt = selected_prompt.replace("[ŞİRKET_KODU]", comp_name)
+    comp_label = effective_company or "BİST ŞİRKETİ"
+    selected_prompt = selected_prompt.replace("[ŞİRKET_KODU]", comp_label)
 
     real_facts_summary = ""
     matched_chunks = []
     seen_ids = set()
 
-    if req.company and intent_code in ("BILANCO", "GELIR"):
-        facts = extract_real_financial_facts(state.db, req.company)
+    # Finansal Bilanço ve Gelir için gerçek rakamları çıkar
+    if effective_company and intent_code in ("BILANCO", "GELIR"):
+        facts = extract_real_financial_facts(state.db, effective_company)
         if facts:
             fact_lines = [f"• {k.upper()}: {v}" for k, v in facts.items() if k != "date"]
             real_facts_summary = f"BİLANÇO DÖNEMİ: {facts.get('date')} (Birim: {facts.get('para_birimi')})\nAYIKLANAN GERÇEK VERİLER VE RASYOLAR:\n" + "\n".join(fact_lines)
 
-    elif req.company and intent_code == "TEMETTU":
-        div_facts = extract_dividend_facts(state.db, req.company)
+    elif effective_company and intent_code == "TEMETTU":
+        div_facts = extract_dividend_facts(state.db, effective_company)
         if div_facts:
             real_facts_summary = div_facts
 
-    if req.company:
-        comp_str = req.company.upper()
+    # 1. Şirket ve Mod Odaklı Filtrelenmiş Chunk Arama
+    if effective_company:
+        comp_str = effective_company
 
         if intent_code in ("BILANCO", "GELIR"):
             rows = state.db.execute(
@@ -634,7 +682,7 @@ async def ask(req: AskRequest):
                     seen_ids.add(r["id"])
                     matched_chunks.append(r)
 
-        # Fallback to any company chunks if specific intent matched fewer
+        # Şirkete ait genel son bildirimleri ekle (yeterli chunk yoksa)
         if len(matched_chunks) < req.top_k:
             all_comp_rows = state.db.execute(
                 """
@@ -652,59 +700,36 @@ async def ask(req: AskRequest):
                     if len(matched_chunks) >= req.top_k:
                         break
 
-    # Only attempt vector embedding search if no matched chunks found at all
+    # 2. Akıllı Metin / Anahtar Kelime Tabanlı Arama Fallback'i
     if not matched_chunks:
-        emb_client, _, _ = get_chat_client(groq_key=None, provider="local")
-        try:
-            subprocess.run(["foundry", "model", "load", EMBEDDING_MODEL], capture_output=True)
-            q_res = emb_client.embeddings.create(model=EMBEDDING_MODEL, input=req.question)
-            subprocess.run(["foundry", "model", "unload", EMBEDDING_MODEL], capture_output=True)
+        keywords = [w for w in re.findall(r"\b[A-Za-z0-9ÇĞİÖŞÜçğıöşü]{3,}\b", req.question) if len(w) > 2]
+        if keywords:
+            clauses = " OR ".join(["(title LIKE ? OR summary LIKE ? OR text LIKE ?)" for _ in keywords[:4]])
+            params = []
+            for kw in keywords[:4]:
+                term = f"%{kw}%"
+                params.extend([term, term, term])
 
-            q_embedding = q_res.data[0].embedding
-            q_blob = serialize_f32(q_embedding)
+            sql = f"SELECT * FROM chunks WHERE ({clauses})"
+            if effective_company:
+                sql += " AND (company = ? OR company LIKE ?)"
+                params.extend([effective_company, f"%{effective_company}%"])
+            if req.type:
+                sql += " AND type = ?"
+                params.append(req.type.upper())
 
-            fetch_count = req.top_k * 15 if (req.company or req.type) else req.top_k * 5
-            vec_rows = state.db.execute(
-                """
-                SELECT v.id, v.distance
-                FROM vec_chunks v
-                WHERE v.embedding MATCH ?
-                ORDER BY v.distance
-                LIMIT ?
-                """,
-                (q_blob, fetch_count),
-            ).fetchall()
-
-            if vec_rows:
-                candidate_ids = [r["id"] for r in vec_rows if r["id"] not in seen_ids]
-                if candidate_ids:
-                    placeholders = ",".join(["?" for _ in candidate_ids])
-                    sql = f"SELECT * FROM chunks WHERE id IN ({placeholders})"
-                    params = list(candidate_ids)
-
-                    if req.company:
-                        sql += " AND (company = ? OR company LIKE ?)"
-                        params.extend([req.company.upper(), f"%{req.company.upper()}%"])
-                    if req.type:
-                        sql += " AND type = ?"
-                        params.append(req.type.upper())
-
-                    sql += " ORDER BY date DESC"
-                    vec_matched = state.db.execute(sql, params).fetchall()
-                    for r in vec_matched:
-                        if r["id"] not in seen_ids:
-                            seen_ids.add(r["id"])
-                            matched_chunks.append(r)
-                            if len(matched_chunks) >= req.top_k:
-                                break
-        except Exception as e:
-            print(f"[-] Vektör arama uyarısı: {e}")
+            sql += f" ORDER BY date DESC LIMIT {req.top_k}"
+            text_rows = state.db.execute(sql, params).fetchall()
+            for r in text_rows:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    matched_chunks.append(r)
 
     matched_chunks = matched_chunks[:req.top_k]
 
     if not matched_chunks:
         return AskResponse(
-            answer="Bu filtrelerle KAP verilerinde bilgi bulunamadı.",
+            answer="Bu sorgu veya filtrelerle KAP veritabanında ilgili bildirim bulunamadı.",
             sources=[],
             chunks_used=0,
             query_time_ms=round((time.time() - start) * 1000, 1),
@@ -712,6 +737,7 @@ async def ask(req: AskRequest):
             cached=False,
         )
 
+    # Context Parçalarını Birleştir
     context_parts = []
     if real_facts_summary:
         context_parts.append(f"[AYIKLANAN DOĞRUDAN KAP BİLGİLERİ VE VERİLER]\n{real_facts_summary}")
@@ -723,9 +749,6 @@ async def ask(req: AskRequest):
 
     context = "\n\n---\n\n".join(context_parts)
 
-    if "groq.com" not in str(client.base_url):
-        subprocess.run(["foundry", "model", "load", model_name], capture_output=True)
-
     messages = [
         {"role": "system", "content": selected_prompt},
         {
@@ -736,73 +759,59 @@ async def ask(req: AskRequest):
         },
     ]
 
-    chat_res = client.chat.completions.create(
-        model=model_name,
-        messages=messages,
-        max_tokens=1500,
-        temperature=0.1,
-    )
-    answer = chat_res.choices[0].message.content or ""
-    
-    # Strip <think>...</think> reasoning blocks
-    answer = re.sub(r"<think>.*?</think>", "", answer, flags=re.DOTALL).strip()
-
-    # Extract clean response starting at title emoji / markdown header
-    for header_symbol in ["📋", "📈", "💰", "🤝", "⭐", "# "]:
-        if header_symbol in answer:
-            answer = header_symbol + answer.split(header_symbol, 1)[-1]
-            break
-
-    # Strip trailing internal reasoning text if present
-    for cot_marker in ["1.  **Extract", "1.  **Analyze", "Provided Data:", "- **Provided Data:**", "2.  **Extract", "3.  **Construct", "Question at the end"]:
-        if cot_marker in answer:
-            answer = answer.split(cot_marker)[0].strip()
-
-    # Clean leftover placeholders without hardcoded values
-    answer = re.sub(r"\[(Metindeki [^\]]+|Rakam|SKOR|Değerlendirme|Oran/Değişim|Faaliyet Marjı|Net Kar Marjı)\]", "- (Belirtilmedi)", answer)
-
-    if "Lütfen bildiğiniz verilerde" in answer:
-        answer = answer.split("Lütfen bildiğiniz verilerde")[0].strip()
-
-    seen = set()
-    sources = []
-    for i, chunk in enumerate(matched_chunks):
-        key = (chunk["source_index"], chunk["source_type"], chunk["attachment_filename"])
-        if key not in seen:
-            seen.add(key)
-            sources.append(Source(
-                company=chunk["company"],
-                company_name=chunk["company_name"],
-                title=chunk["title"],
-                date=chunk["date"],
-                type=chunk["type"],
-                url=chunk["source_url"],
-                source_type=chunk["source_type"],
-                attachment_filename=chunk["attachment_filename"],
-                relevance_rank=i + 1,
-            ))
+    try:
+        chat_res = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=1800,
+        )
+        answer = chat_res.choices[0].message.content
+    except Exception as e:
+        answer = f"⚠️ Yapay zeka modeli yanıt üretemedi: {e}\n(Lütfen .env dosyasındaki GROQ_API_KEY anahtarınızı kontrol edin.)"
 
     query_time = (time.time() - start) * 1000
 
-    result_dict = {
-        "answer": answer,
-        "sources": [s.model_dump() for s in sources],
-        "chunks_used": len(matched_chunks),
-        "query_time_ms": round(query_time, 1),
-        "intent": intent_code,
-    }
+    sources_list = []
+    for i, chunk in enumerate(matched_chunks):
+        sources_list.append(Source(
+            company=chunk["company"],
+            company_name=chunk["company_name"],
+            title=chunk["title"],
+            date=chunk["date"],
+            type=chunk["type"],
+            url=chunk["source_url"],
+            source_type=chunk["source_type"] or "content",
+            attachment_filename=chunk["attachment_filename"],
+            relevance_rank=i + 1,
+        ))
 
-    set_cached_answer(state.db, req.question, req.company, result_dict)
+    # Başarılı yanıtı önbelleğe kaydet
+    if "⚠️" not in answer:
+        set_cached_answer(
+            state.db,
+            req.question,
+            effective_company or "",
+            {
+                "answer": answer,
+                "sources": [s.model_dump() for s in sources_list],
+                "chunks_used": len(matched_chunks),
+                "query_time_ms": query_time,
+                "intent": intent_code,
+            }
+        )
 
     return AskResponse(
         answer=answer,
-        sources=sources,
+        sources=sources_list,
         chunks_used=len(matched_chunks),
         query_time_ms=round(query_time, 1),
         intent=intent_code,
         cached=False,
     )
 
+
+# ──────────────────────────── Yardımcı API Endpoint'leri ────────────────────────────
 
 @app.get("/api/companies")
 async def list_companies():
@@ -901,7 +910,6 @@ def fetch_midas_bist100() -> dict:
                     vol_tl = cols[8]
                     vol_lot = cols[9]
 
-                    # Direction
                     if change_pct.startswith("-"):
                         direction = "down"
                         down_count += 1
@@ -960,12 +968,11 @@ async def get_bist100():
     return fetch_midas_bist100()
 
 
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="KAP RAG API Sunucusu (Groq API & Local Foundry)")
-    parser.add_argument("--host", default="0.0.0.0", help="Sunucu adresi")
-    parser.add_argument("--port", type=int, default=8000, help="Port numarası")
-    parser.add_argument("--groq-key", default=DEFAULT_GROQ_KEY, help="Groq API anahtarı (gsk_...)")
+    parser = argparse.ArgumentParser(description="KAPKANN RAG API Sunucusu (Groq Cloud)")
+    parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"), help="Sunucu adresi")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)), help="Port numarası")
+    parser.add_argument("--groq-key", default=DEFAULT_GROQ_KEY, help="Groq API anahtarı")
     args = parser.parse_args()
 
     state.groq_key = args.groq_key
